@@ -13,9 +13,9 @@ import matplotlib.pyplot as plt
 
 filename = "Ha_nonlinear_median.xisf"
 
-N = 24
+N = 16
 O = 3
-B = 1
+B = 1 # TODO: batch_size, any effect on convergence?
 
 alpha = 1
 
@@ -78,22 +78,24 @@ lrsched = tf.keras.callbacks.LearningRateScheduler(lr_sched, verbose=True)
 callbacks = [earlystop, reduce_lr] #, lrsched]
 
 # %%
-# Draw spline train points
-from matplotlib.patches import Rectangle
-
-def plot_train_points():
-    train_points = model.layers[1].train_points.numpy()[0]
-    ax = plt.plot(train_points[:,0], train_points[:,1], 'o')
-    rect = Rectangle((0, 0), 1, 1, linewidth=1, edgecolor='r', facecolor='none')
-    _ = plt.gca().add_patch(rect)
-
-plot_train_points()
-
-# %%
 im_orig = np.expand_dims(im_orig, axis=0)
 y_true = im_orig.repeat(B, axis=0)
 X = np.zeros(B) 
 im_orig.shape, y_true.shape, X.shape
+
+# %%
+# Draw spline train points
+import seaborn as sns
+from matplotlib.patches import Rectangle
+
+def plot_train_points():
+    train_points = model.layers[1].train_points.numpy()[0]
+    # values = _apply_interpolation...
+    ax = sns.scatterplot(x=train_points[:,0], y=train_points[:,1]) 
+    rect = Rectangle((0, 0), 1, 1, linewidth=1, edgecolor='r', facecolor='none')
+    _ = plt.gca().add_patch(rect)
+
+plot_train_points()
 
 # %%
 history = model.fit(
