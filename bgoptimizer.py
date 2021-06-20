@@ -15,7 +15,7 @@ filename = "Ha_nonlinear_median.xisf"
 
 N = 16
 O = 3
-B = 1 # TODO: batch_size, any effect on convergence?
+B = 1
 
 alpha = 1
 
@@ -85,15 +85,17 @@ im_orig.shape, y_true.shape, X.shape
 
 # %%
 # Draw spline train points
-import seaborn as sns
-from matplotlib.patches import Rectangle
+#from matplotlib.patches import Rectangle
 
 def plot_train_points():
+    h, w, _ = im_shape
     train_points = model.layers[1].train_points.numpy()[0]
-    # values = _apply_interpolation...
-    ax = sns.scatterplot(x=train_points[:,0], y=train_points[:,1]) 
-    rect = Rectangle((0, 0), 1, 1, linewidth=1, edgecolor='r', facecolor='none')
-    _ = plt.gca().add_patch(rect)
+
+    fig, ax = plt.subplots(figsize=(16,8))
+    ax.imshow(im_orig[0,...], cmap='inferno')
+    ax.plot(train_points[:,0]*w, train_points[:,1]*h, 'go', fillstyle='none')
+    #rect = Rectangle((0, 0), w, h, linewidth=1, edgecolor='r', facecolor='none')
+    #_ = plt.gca().add_patch(rect)
 
 plot_train_points()
 
@@ -107,21 +109,23 @@ history = model.fit(
 plt.plot(history.history['loss'], label='Loss')
 
 # %%
-y_pred = model.predict_on_batch(X).numpy()
+y_pred = model.predict_on_batch(X)
 
-plt.imshow(y_pred[0,...,0], cmap='gray', vmin=0, vmax=1)
+plt.imshow(y_pred[0,...], cmap='gray', vmin=0, vmax=1)
 
 # %%
 plot_train_points()
 
 # %%
 plt.figure(figsize=(16,10))
-plt.imshow(y_true[0,...,0], cmap='gray')
+plt.imshow(y_true[0,...], cmap='gray')
 
 # %%
 plt.figure(figsize=(16,10))
-plt.imshow(y_true[0,...,0] - y_pred[0,...,0], cmap='gray')
+plt.imshow(y_true[0,...] - y_pred[0,...], cmap='gray')
 
 # %%
+print("N, B, epochs, loss: %d, %d, %d, %.5f" % (N, B, len(history.history['loss']), min(history.history['loss'])))
 
 
+# %%
