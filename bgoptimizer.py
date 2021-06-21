@@ -1,56 +1,51 @@
 # %%
-%load_ext autoreload
-%autoreload 2
+#%load_ext autoreload
+#%autoreload 2
 
-# %%
 import os
 from xisf import XISF
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from spline import Spline
+
+# For visualization only
 import matplotlib.pyplot as plt
+from PIL import Image 
 
-filename = "Ha_nonlinear_median.xisf"
-
-N = 16
-O = 3
-B = 1
-
-alpha = 1
-
-lr = 0.001
-epochs = 1000
+# For experiments only
+import pandas as pd 
 
 # %%
-xisf = XISF(filename)
-im_orig = xisf.read_image(0)
-im_shape = im_orig.shape
+
+# __/ Script parameters \__________
+# TODO: command line args
+filename = "Pleyades_L_nonlinear_median.xisf" #"Ha_nonlinear_median.xisf"
+
+config = {
+    'N': 20,
+    'O': 3,
+    'B': 4,
+    'alpha': 1,
+    'lr': 0.001,
+    'epochs': 1000,
+}
 
 
 # %%
-x = keras.layers.Input(shape=(), name='input_layer', batch_size=B)
-y = Spline(im_orig, control_points=N, order=O)(x)
-model = keras.Model(inputs=x, outputs=y, name="bgmodel")
 
-model.summary()
-
-optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
-
-# %%
+# __/ Custom loss \__________
 def bg_loss_alpha(y_true, y_pred, alpha):
-    r = y_pred - y_true
+    r = y_true - y_pred
     abs_r = tf.math.abs(r)
 
-    mse = tf.math.reduce_mean(r*r, axis=-1)
+    mse = tf.math.reduce_mean(r*r, axis=-1) # TODO: mae abs_r vs mse r*r
     penalty = tf.math.reduce_mean(abs_r - r, axis=-1)
 
     return mse + alpha*penalty
 
-bg_loss = lambda y_true, y_pred: bg_loss_alpha(y_true, y_pred, alpha)
 
-model.compile(optimizer, loss=bg_loss)
-
+# __/ Callbacks \__________
 earlystop = tf.keras.callbacks.EarlyStopping(
     monitor='loss', 
     min_delta=0.0001, 
@@ -75,57 +70,133 @@ def lr_sched(epoch, lr):
 
 lrsched = tf.keras.callbacks.LearningRateScheduler(lr_sched, verbose=True)
 
-callbacks = [earlystop, reduce_lr] #, lrsched]
 
-# %%
-im_orig = np.expand_dims(im_orig, axis=0)
-y_true = im_orig.repeat(B, axis=0)
-X = np.zeros(B) 
-im_orig.shape, y_true.shape, X.shape
+class PredictionCallback(tf.keras.callbacks.Callback):    
+  def on_epoch_end(self, epoch, logs={}):
+    y_pred = self.model.predict_on_batch(X)
+    final = y_true[0,...,0] - y_pred[0,...,0]
+    final -= final.min()
+    final /= final.max()
+    im = Image.fromarray( (255 * final).astype(np.uint8) )
+    im.save("out\\Epoch_%03d.png" % (epoch,))
 
-# %%
-# Draw spline train points
-#from matplotlib.patches import Rectangle
+prediction = PredictionCallback()
 
-def plot_train_points():
-    h, w, _ = im_shape
+callbacks = [earlystop, reduce_lr] #, prediction] #, lrsched]
+
+
+# __/ Model fit and predict (spline fitting) \__________
+def fit_spline(im, config):
+    N, O, alpha = config['N'], config['O'],  config['alpha']
+    B, lr, epochs = config['B'], config['lr'], config['epochs']
+
+    im_orig = np.expand_dims(im, axis=0)
+    y_true = im_orig.repeat(B, axis=0)
+    X = np.zeros(B) 
+    #print(im_orig.shape, y_true.shape, X.shape)
+
+    x = keras.layers.Input(shape=(), name='input_layer', batch_size=B)
+    y = Spline(im, control_points=N, order=O)(x)
+    model = keras.Model(inputs=x, outputs=y, name="bgmodel")
+
+    model.summary()
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
+    bg_loss = lambda y_true, y_pred: bg_loss_alpha(y_true, y_pred, alpha) 
+    model.compile(optimizer, loss=bg_loss)
+
+    history = model.fit(
+        x=X, y=y_true, 
+        epochs=epochs, 
+        callbacks=callbacks
+    )
+
+    y_pred = model.predict(X)
+
+    return y_pred, model, history
+
+
+# __/ Draw spline train points \__________
+def plot_train_points(model, im):
+    h, w, _ = im.shape
     train_points = model.layers[1].train_points.numpy()[0]
 
     fig, ax = plt.subplots(figsize=(16,8))
-    ax.imshow(im_orig[0,...], cmap='inferno')
+    ax.imshow(im, cmap='gray')
     ax.plot(train_points[:,0]*w, train_points[:,1]*h, 'go', fillstyle='none')
-    #rect = Rectangle((0, 0), w, h, linewidth=1, edgecolor='r', facecolor='none')
-    #_ = plt.gca().add_patch(rect)
 
-plot_train_points()
 
 # %%
-history = model.fit(
-    x=X, y=y_true, 
-    epochs=epochs, 
-    callbacks=callbacks
-)
 
+# __/ Main script \__________
+xisf = XISF(filename)
+im_orig = xisf.read_image(0)
+
+y_pred, model, history = fit_spline(im_orig, config)
 plt.plot(history.history['loss'], label='Loss')
 
 # %%
-y_pred = model.predict_on_batch(X)
-
-plt.imshow(y_pred[0,...], cmap='gray', vmin=0, vmax=1)
-
-# %%
-plot_train_points()
+bg = y_pred[0,...]
+plt.imshow(bg, cmap='gray', vmin=0, vmax=1)
 
 # %%
-plt.figure(figsize=(16,10))
-plt.imshow(y_true[0,...], cmap='gray')
+plot_train_points(model, im_orig)
 
 # %%
 plt.figure(figsize=(16,10))
-plt.imshow(y_true[0,...] - y_pred[0,...], cmap='gray')
+plt.imshow(im_orig, cmap='gray')
 
 # %%
-print("N, B, epochs, loss: %d, %d, %d, %.5f" % (N, B, len(history.history['loss']), min(history.history['loss'])))
+final = im_orig - bg
+plt.figure(figsize=(16,10))
+plt.imshow(final, cmap='gray')
+
+print("Range: ", final.min(), final.max())
+
+# %%
+print("N, B, epochs, loss: %d, %d, %d, %.5f" % (config['N'], config['B'], len(history.history['loss']), min(history.history['loss'])))
+
+# %%
+plt.imshow(-final.clip(-1,0), cmap='gray')
 
 
 # %%
+# Experiment: variance 
+#experiment = []
+#for _ in range(0, 15):
+#    y_pred, model, history = fit_spline(im_orig, config)
+#    bg = y_pred[0,...]
+#    final = im_orig - bg#
+#
+#    data = {
+#        'loss': min(history.history['loss']),
+#        'epochs': len(history.history['loss']),
+#        'min': final.min()
+#    }
+#    experiment.append(data)#
+#
+#df = pd.DataFrame(experiment)
+#df[['loss']].plot()
+#df.to_csv("%s_B%d_var.csv" % (filename, config['B']))
+
+
+# %%
+# Experiment: varying N
+#experiment = []
+#for N in [15, 25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300]:
+#    config['N'] = N
+#    y_pred, model, history = fit_spline(im_orig, config)
+#    bg = y_pred[0,...]
+#    final = im_orig - bg
+#
+#    data = {
+#        'N': N,
+#        'loss': min(history.history['loss']),
+#        'epochs': len(history.history['loss']),
+#        'min': final.min()
+#    }
+#    experiment.append(data)
+#
+#df = pd.DataFrame(experiment).set_index("N")
+#df[['loss']].plot()
+#df.to_csv("%s_N.csv" % (filename,))
