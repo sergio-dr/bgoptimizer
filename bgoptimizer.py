@@ -20,12 +20,12 @@ import pandas as pd
 
 # __/ Script parameters \__________
 # TODO: command line args
-filename = "Pleyades_L_nonlinear_median.xisf" #"Ha_nonlinear_median.xisf"
+filename = "Ha_nonlinear_median.xisf" # "Pleyades_L_nonlinear_median.xisf"
 
 config = {
-    'N': 20,
+    'N': 300,
     'O': 3,
-    'B': 4,
+    'B': 1,
     'alpha': 1,
     'lr': 0.001,
     'epochs': 1000,
@@ -39,17 +39,22 @@ def bg_loss_alpha(y_true, y_pred, alpha):
     r = y_true - y_pred
     abs_r = tf.math.abs(r)
 
-    mse = tf.math.reduce_mean(r*r, axis=-1) # TODO: mae abs_r vs mse r*r
-    penalty = tf.math.reduce_mean(abs_r - r, axis=-1)
+    # TODO: mae abs_r vs mse r*r ...
+    # tf.math.log(1+r*r)
+    # tf.math.reciprocal( 1+tf.math.exp(-2*r*r) - 0.5 )
+    error = tf.math.reduce_mean( r*r , axis=-1) 
 
-    return mse + alpha*penalty
+    penalty = tf.math.reduce_mean(abs_r - r, axis=-1) / 2
+    negative_bg = tf.math.reduce_mean(tf.math.abs(y_pred) - y_pred) / 2
+
+    return error + alpha*(penalty + negative_bg)
 
 
 # __/ Callbacks \__________
 earlystop = tf.keras.callbacks.EarlyStopping(
     monitor='loss', 
     min_delta=0.0001, 
-    patience=50,
+    patience=25,
     restore_best_weights=True,
     verbose=True
 )
@@ -138,6 +143,7 @@ plt.plot(history.history['loss'], label='Loss')
 # %%
 bg = y_pred[0,...]
 plt.imshow(bg, cmap='gray', vmin=0, vmax=1)
+print("Range: ", bg.min(), bg.max())
 
 # %%
 plot_train_points(model, im_orig)
@@ -158,6 +164,14 @@ print("N, B, epochs, loss: %d, %d, %d, %.5f" % (config['N'], config['B'], len(hi
 
 # %%
 plt.imshow(-final.clip(-1,0), cmap='gray')
+# TODO: salen valores negativos, es necesario hacer final -= final.min() para ajustar el 0. 
+
+# %%
+final -= final.min()
+if final.max() > 1:
+    final /= final.max()
+# %%
+XISF.write("final_%s" % (filename,), final, xisf.get_images_metadata()[0], xisf.get_file_metadata())
 
 
 # %%
