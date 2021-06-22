@@ -1,6 +1,6 @@
 # %%
-#%load_ext autoreload
-#%autoreload 2
+%load_ext autoreload
+%autoreload 2
 
 import os
 from xisf import XISF
@@ -20,32 +20,42 @@ import pandas as pd
 
 # __/ Script parameters \__________
 # TODO: command line args
-filename = "Ha_nonlinear_median.xisf" # "Pleyades_L_nonlinear_median.xisf"
+filename = "Ha_nonlinear_median.xisf" # "Pleyades_L_nonlinear_median.xisf" 
 
 config = {
-    'N': 300,
+    'N': 400,
     'O': 3,
+    'threshold': 0.5,
     'B': 1,
-    'alpha': 1,
+    'alpha': 100,
     'lr': 0.001,
-    'epochs': 1000,
+    'epochs': 5000,
 }
 
 
 # %%
 
 # __/ Custom loss \__________
-def bg_loss_alpha(y_true, y_pred, alpha):
+# TODO: meter esta función en la capa spline ??
+def bg_loss_alpha(y_true, y_pred, model, alpha):
+    # Residuals
     r = y_true - y_pred
+
+    # Apply mask of residuals
+    if model.layers[1].mask is not None:
+        r *= model.layers[1].mask
+
     abs_r = tf.math.abs(r)
 
     # TODO: mae abs_r vs mse r*r ...
     # tf.math.log(1+r*r)
-    # tf.math.reciprocal( 1+tf.math.exp(-2*r*r) - 0.5 )
-    error = tf.math.reduce_mean( r*r , axis=-1) 
+    # 2*tf.math.reciprocal( 1+tf.math.exp(-15*r*r))-1 # tipo sigmoide
+    #   https://www.wolframalpha.com/input/?i=Plot%5B2%2F%281%2Be%5E%28-15*x%5E2%29%29-1%2C+x+%3D+-1+to+1%5D
+    error = tf.math.reduce_mean( abs_r , axis=-1) 
 
+    # TODO: nombrar estos penalties
     penalty = tf.math.reduce_mean(abs_r - r, axis=-1) / 2
-    negative_bg = tf.math.reduce_mean(tf.math.abs(y_pred) - y_pred) / 2
+    negative_bg = tf.math.reduce_mean(tf.math.abs(y_pred) - y_pred) / 2 # Éste aplica independientemente de la máscara
 
     return error + alpha*(penalty + negative_bg)
 
@@ -53,7 +63,7 @@ def bg_loss_alpha(y_true, y_pred, alpha):
 # __/ Callbacks \__________
 earlystop = tf.keras.callbacks.EarlyStopping(
     monitor='loss', 
-    min_delta=0.0001, 
+    min_delta=0.00001, 
     patience=25,
     restore_best_weights=True,
     verbose=True
@@ -92,7 +102,7 @@ callbacks = [earlystop, reduce_lr] #, prediction] #, lrsched]
 
 # __/ Model fit and predict (spline fitting) \__________
 def fit_spline(im, config):
-    N, O, alpha = config['N'], config['O'],  config['alpha']
+    N, O, alpha, threshold = config['N'], config['O'],  config['alpha'], config['threshold']
     B, lr, epochs = config['B'], config['lr'], config['epochs']
 
     im_orig = np.expand_dims(im, axis=0)
@@ -101,13 +111,13 @@ def fit_spline(im, config):
     #print(im_orig.shape, y_true.shape, X.shape)
 
     x = keras.layers.Input(shape=(), name='input_layer', batch_size=B)
-    y = Spline(im, control_points=N, order=O)(x)
+    y = Spline(im, mask=threshold, n_control_points=N, order=O)(x)
     model = keras.Model(inputs=x, outputs=y, name="bgmodel")
 
     model.summary()
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
-    bg_loss = lambda y_true, y_pred: bg_loss_alpha(y_true, y_pred, alpha) 
+    bg_loss = lambda y_true, y_pred: bg_loss_alpha(y_true, y_pred, model, alpha) 
     model.compile(optimizer, loss=bg_loss)
 
     history = model.fit(
@@ -125,10 +135,14 @@ def fit_spline(im, config):
 def plot_train_points(model, im):
     h, w, _ = im.shape
     train_points = model.layers[1].train_points.numpy()[0]
+    if model.layers[1].mask is not None:
+        x = im * model.layers[1].mask.numpy()
+    else:
+        x = im
 
     fig, ax = plt.subplots(figsize=(16,8))
-    ax.imshow(im, cmap='gray')
-    ax.plot(train_points[:,0]*w, train_points[:,1]*h, 'go', fillstyle='none')
+    ax.imshow(x, cmap='gray')
+    ax.plot(train_points[:,1]*w, train_points[:,0]*h, 'go', fillstyle='none')
 
 
 # %%
@@ -139,6 +153,10 @@ im_orig = xisf.read_image(0)
 
 y_pred, model, history = fit_spline(im_orig, config)
 plt.plot(history.history['loss'], label='Loss')
+
+#%%
+if model.layers[1].mask is not None:
+    plt.imshow(model.layers[1].mask.numpy())
 
 # %%
 bg = y_pred[0,...]

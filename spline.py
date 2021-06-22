@@ -23,10 +23,16 @@ class Spline(keras.layers.Layer):
     all pixels positions of the image im, i.e, the output of the layer
     is a image with the same shape as im.
 
+    You can specify a mask to avoid placing control points on high-valued pixels. 
+    The mask is stored in the layer (Spline.mask) as a tensor so you can use also
+    for applying it on custom loss functions. 
+
     Attributes:
-        im: image to fit the spline to; expected shape is (h, w, 1).
-        control_points: number of control points for the spline (16 by default)
-        order: 2 (thin-plate spline) o 3 (bicubic spline, default)
+        im: image (ndarray) to fit the spline to; expected shape is (h, w, 1).
+        mask: if float, defines the threshold value for the mask; if ndarray, it has to
+          have the same shape as im; if None (default), no mask is used.
+        n_control_points: number of control points for the spline (16 by default)
+        order: 2 (thin-plate spline) or 3 (bicubic spline, default)
 
     Input shape:
         Ignored, except for the batch_size.
@@ -51,11 +57,12 @@ class Spline(keras.layers.Layer):
     #   n = number of train points (parameter of the layer)
     #   k = output values dimensions (1 in this case)
 
-    def __init__(self, im, control_points=16, order=3, **kwargs):
+    def __init__(self, im, mask=None, n_control_points=16, order=3, **kwargs):
         super(Spline, self).__init__(**kwargs)
         self.im = im
+        self.mask = mask
         self.shape = im.shape
-        self.control_points = control_points
+        self.n_control_points = n_control_points
         self.order = order
 
     def build(self, input_shape):
@@ -66,21 +73,73 @@ class Spline(keras.layers.Layer):
         y, x = np.linspace(0, 1, h, endpoint=False), np.linspace(0, 1, w, endpoint=False)
         self.query_points = tf.constant(np.array(np.meshgrid(y, x)).T.reshape(1, -1, 2).astype(np.float32)) 
 
-        # train_points: randomly distributed over ([0,1], [0,1]) range
-        train_points_initializer = tf.keras.initializers.RandomUniform(minval=0.0, maxval=1.0)
-        self.train_points = self.add_weight(
-            shape=(1, self.control_points, 2), initializer=train_points_initializer, trainable=True
-        )
+        # If mask is given as a threshold, create the real mask (as ndarray) from the image
+        if isinstance(self.mask, float): 
+            threshold = self.mask
+            self.mask = (self.im < threshold).astype(np.float32) 
+            # 1 on pixels below threshold, 0 otherwise
 
-        # w, v spline coefficients: initialize from actual image pixel values on the train_points (scaled
-        # to the image size) for faster convergence (much faster than random initialization)
-        train_coords = self.train_points.numpy().squeeze(axis=0)
-        train_coords = (train_coords * np.array(self.shape[:-1])).astype('int') # nearest pixel position
-        train_values = np.expand_dims(self.im[ train_coords[:,0], train_coords[:,1], 0 ], axis=(0,-1))
+        # The mask (given as attr, or determined by threshold) is assumed to be an ndarray (image)
+        # Generate the pixel locations not masked
+        if self.mask is not None:
+            assert(self.mask.shape == self.im.shape)
+            idx = np.transpose(self.mask.squeeze(axis=-1).nonzero()) 
+                # idx = ndarray with unmasked pixel locations, shape=(number of unmasked pixels, 2)
+            #self.idx = idx # debug
+
+            # Save the mask as a tensor, for later use in loss function
+            self.mask = tf.constant(self.mask)
+        else:
+            idx = None
+
+        # Generate train_coords (pixel locations) and then train_points (coords mapped to [0,1))
+        try:
+            # Sample randomly unmasked pixel locations
+            n_unmasked_pixels = idx.shape[0]
+            if n_unmasked_pixels == 0:
+                print("Warning: empty mask, ignoring")
+             
+            random_sample = np.random.choice(n_unmasked_pixels, size=self.n_control_points, replace=False) 
+                # replace=False so we don't repeat pixel locations            
+            
+            # Get sampled pixel locations
+            train_coords = idx[random_sample]
+
+            # Map coords to [0,1). Explicit float32 dtype.
+            train_points = np.divide(train_coords, np.array([h, w]), dtype=np.float32) 
+            # Expand for batch axis
+            train_points = np.expand_dims(train_points, axis=0) 
+            # Create layer weights for train_points
+            self.train_points = tf.Variable(initial_value=train_points, trainable=True)
+
+        except (AttributeError, ValueError):
+
+            # ... then either
+            #   mask==None (idx is None => AttributeError at idx.shape)
+            # or 
+            #   mask is empty (n_unmasked_pixels == 0 => ValueError at np.random.choice)
+            # In these cases, generate train_points randomly distributed over ([0,1], [0,1]) range
+            # TODO: generar train_coords como enteros y luego hacer común el código de generar train_points?
+            train_points_initializer = tf.keras.initializers.RandomUniform(minval=0.0, maxval=1.0)
+            self.train_points = self.add_weight(
+                shape=(1, self.n_control_points, 2), initializer=train_points_initializer, trainable=True
+            )
+            train_coords = self.train_points.numpy().squeeze(axis=0)
+            train_coords = (train_coords * np.array([h, w])).astype(np.int32) # nearest pixel position
+        
+        # w, v spline coefficients: initialize from actual image pixel values on the train_points 
+        # for faster convergence (much faster than random initialization)
+        # TODO: apply the mask here, to weight the initial train_values?
+        train_values = self.im[ train_coords[:,0], train_coords[:,1], 0 ]
+        # Expand for batch and output axis
+        train_values = np.expand_dims(train_values, axis=(0,-1))
+
         # We use tfa.image._solve_interpolation for the initial spine coefficient values
+        # TODO: make regularization_weight an argument?
         ww, vw = _solve_interpolation(
             self.train_points, train_values, self.order, regularization_weight=0.1
         ) 
+        # Create layer weights for w and v spline coefficients
         self.ww = tf.Variable(initial_value=ww, trainable=True)
         self.vw = tf.Variable(initial_value=vw, trainable=True)
 
@@ -92,17 +151,18 @@ class Spline(keras.layers.Layer):
 
         # Clip the train_points to the [0,1] box to constrain them
         # TODO: make this optional?
-        train_points = keras.backend.clip(self.train_points, 0.0, 1.0)
+        #train_points = keras.backend.clip(self.train_points, 0.0, 1.0)
+        train_points = self.train_points
 
         # Broadcast the weights and query_points to the batch_size
         train_points = tf.repeat(train_points, self.batch_size, axis=0)
-        w_weights = tf.repeat(self.ww, self.batch_size, axis=0)# / (w*w*h*h)
+        w_weights = tf.repeat(self.ww, self.batch_size, axis=0)
         v_weights = tf.repeat(self.vw, self.batch_size, axis=0)
         query_points = tf.repeat(self.query_points, self.batch_size, axis=0)
 
         # Perform the interpolation, output shape is (batch_size, h*w, 1)
         query_values = _apply_interpolation(
-            query_points=self.query_points,
+            query_points=query_points,
             train_points=train_points,
             w=w_weights,
             v=v_weights,
@@ -113,9 +173,10 @@ class Spline(keras.layers.Layer):
         return tf.reshape(query_values, (-1, h, w, 1))
 
     # TODO: sí puede ser interesante añadir un método para generar el spline sobre otro
-    # conjunto de query_points (para la imagen en tamaño original, entiendiendo que el
+    # conjunto de query_points (para la imagen en tamaño original, entendiendo que el
     # entrenamiento se hará sobre una imagen reducida)
-    def generate_spline(shape):
+    def apply_to(im):
         # generar query_points según shape
         # use ww y vw y _apply_interpolation para generar spline
-        pass
+        im_oout, bg = None, None
+        return im_out, bg
