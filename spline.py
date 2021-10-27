@@ -2,6 +2,7 @@ import tensorflow as tf
 from tensorflow_addons.image.interpolate_spline import _apply_interpolation, _solve_interpolation
 from tensorflow import keras
 import numpy as np
+import math
 
 class Spline(keras.layers.Layer):
     """
@@ -76,7 +77,9 @@ class Spline(keras.layers.Layer):
         # If mask is given as a threshold, create the real mask (as ndarray) from the image
         if isinstance(self.mask, float): 
             threshold = self.mask
-            self.mask = (self.im < threshold).astype(np.float32) 
+            # TODO: (0.0 < self.im) es para evitar áreas sin señal, pero ´
+            # sólo se aplica si se define mask como umbral
+            self.mask = ((0.0 < self.im) & (self.im < threshold)).astype(np.float32) 
             # 1 on pixels below threshold, 0 otherwise
 
         # The mask (given as attr, or determined by threshold) is assumed to be an ndarray (image)
@@ -172,11 +175,40 @@ class Spline(keras.layers.Layer):
         # Reshape to (batch_size, h, w, 1)
         return tf.reshape(query_values, (-1, h, w, 1))
 
-    # TODO: sí puede ser interesante añadir un método para generar el spline sobre otro
-    # conjunto de query_points (para la imagen en tamaño original, entendiendo que el
-    # entrenamiento se hará sobre una imagen reducida)
-    def apply_to(im):
-        # generar query_points según shape
-        # use ww y vw y _apply_interpolation para generar spline
-        im_oout, bg = None, None
-        return im_out, bg
+
+    # Training is usually done on a downscaled image; this method allows to 
+    # generate the trained spline on any shape = (h,w,...) (usually (h,w,1)). 
+    #
+    # Note: this has to be done in chunks, because _apply_interpolation()
+    # gives an OOM error trying to MatMul if query_points is large.  
+    # chunks = downscale_factor**2 avoids OOM, if the spline could train with that
+    # downscale_factor.
+    def interpolate(self, shape, chunks):
+        h, w = shape[:2]
+
+        # Generate query_points according to im.shape
+        y, x = np.linspace(0, 1, h, endpoint=False), np.linspace(0, 1, w, endpoint=False)
+        query_points = tf.constant(np.array(np.meshgrid(y, x)).T.reshape(1, -1, 2).astype(np.float32)) 
+
+        # Use ww & vw on _apply_interpolation to generate the spline
+        chunk_sz = math.ceil((h*w) / chunks)
+        query_values = []
+        for i in range(chunks):
+            start = i*chunk_sz
+            end = min(start + chunk_sz, query_points.shape[1])
+            print(f"{100*i//chunks}..", end='')
+
+            query_points_chunk = query_points[:,start:end,:]
+            query_values_chunk = _apply_interpolation(
+                query_points=query_points_chunk,
+                train_points=self.train_points,
+                w=self.ww,
+                v=self.vw,
+                order=self.order,
+            )
+            query_values.append(query_values_chunk) 
+        query_values = tf.concat(query_values, axis=1)
+        bg = tf.reshape(query_values, shape) 
+        print("100%")
+
+        return bg.numpy()
