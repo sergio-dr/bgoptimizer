@@ -23,20 +23,24 @@ import pandas as pd
 
 # __/ Script parameters \__________
 # TODO: command line args
-filename = "S:\\src\\bg-model\\NorAmPel_integration_O3.xisf" 
-out_filename = "out_NorAmPel_SHO_integration_O3.xisf" #final_%s" % (filename,)
-bg_filename = "bg.xisf"
+base_dir = "S:\\src\\bg-model"
+in_dir = "in\\orion"
+in_filename = "O3.xisf" 
+in_filepath = os.path.join(base_dir, in_dir, in_filename)
+out_dir = "out\\orion"
+out_filepath = os.path.join(base_dir, out_dir, in_filename)
+bg_filepath = os.path.join(base_dir, out_dir, "bg_"+in_filename)
 
 config = {
-    'downscaling_factor': 8, 'downscaling_func': 'median',
+    'downscaling_factor': 8, 'downscaling_func': 'mean',
     'delinearization_quantile': 0.95,
-    'N': 100,
-    'O': 3,
-    'threshold': 0.7,
+    'N': 8,
+    'O': 2,
+    'threshold': 0.9,
     'B': 1,
-    'alpha': 10,
+    'alpha': 5,
     'lr': 0.001,
-    'epochs': 500,
+    'epochs': 10000,
 }
 
 # %%
@@ -52,7 +56,7 @@ def statistics(im, title=""):
 
 
 def plot_image_hist(im, title=""):
-    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(16,10))
+    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(16,12), gridspec_kw={'height_ratios': [4, 1]})
     _ = ax0.imshow(im, cmap='gray', vmin=0, vmax=1)
     _ = ax1.hist(im.ravel(), bins=100)
     fig.suptitle(title, fontsize=12)
@@ -122,8 +126,9 @@ def bg_loss_alpha(y_true, y_pred, model, alpha):
     r = y_true - y_pred
 
     # Apply mask of residuals
-    if model.layers[1].mask is not None:
-        r *= model.layers[1].mask
+    spline_layer = model.layers[1]
+    if spline_layer.mask is not None:
+        r *= spline_layer.mask
 
     abs_r = tf.math.abs(r)
 
@@ -134,17 +139,19 @@ def bg_loss_alpha(y_true, y_pred, model, alpha):
     error = tf.math.reduce_mean( abs_r , axis=-1) 
 
     # TODO: nombrar estos penalties
-    penalty = tf.math.reduce_mean(abs_r - r, axis=-1) / 2
-    negative_bg = tf.math.reduce_mean(tf.math.abs(y_pred) - y_pred) / 2 # Éste aplica independientemente de la máscara
+    penalty = tf.math.reduce_mean(abs_r - r, axis=-1)
+    negative_bg = tf.math.reduce_mean(tf.math.abs(y_pred) - y_pred) # Éste aplica independientemente de la máscara
 
-    return error + alpha*(penalty + negative_bg)
+    #return error + alpha*penalty + 0.1*tf.math.reduce_mean(tf.math.square(spline_layer.ww)) #+ tf.math.reduce_mean(tf.math.square(spline_layer.vw))
+    return error + alpha*(penalty + negative_bg) #+ 0.1*tf.math.reduce_mean(tf.math.square(spline_layer.ww)) #+ tf.math.reduce_mean(tf.math.square(spline_layer.vw))
+    #return tf.math.log(0.001 + error + alpha*(penalty + negative_bg))
 
 
 # __/ Callbacks \__________
 earlystop = tf.keras.callbacks.EarlyStopping(
     monitor='loss', 
-    min_delta=0.00001, 
-    patience=25,
+    min_delta=0.00005, 
+    patience=100,
     restore_best_weights=True,
     verbose=True
 )
@@ -153,7 +160,7 @@ reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
     monitor='loss', 
     factor=0.5,
     patience=50, 
-    min_lr=0.000001,
+    min_lr=0.0001,
     verbose=True
 )
 
@@ -177,7 +184,7 @@ class PredictionCallback(tf.keras.callbacks.Callback):
 
 prediction = PredictionCallback()
 
-callbacks = [reduce_lr] # [earlystop, reduce_lr] #, prediction] #, lrsched]
+callbacks = [earlystop, reduce_lr] #, prediction] #, lrsched]
 
 
 # __/ Model fit and predict (spline fitting) \__________
@@ -194,6 +201,8 @@ def fit_spline(im, config):
     y = Spline(im, mask=threshold, n_control_points=N, order=O)(x)
     model = keras.Model(inputs=x, outputs=y, name="bgmodel")
 
+    plot_train_points(model, im)
+    plt.show()
     model.summary()
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
@@ -214,9 +223,10 @@ def fit_spline(im, config):
 # __/ Draw spline train points \__________
 def plot_train_points(model, im):
     h, w, _ = im.shape
-    train_points = model.layers[1].train_points.numpy()[0]
-    if model.layers[1].mask is not None:
-        x = im * model.layers[1].mask.numpy()
+    spline_layer = model.layers[1]
+    train_points = spline_layer.train_points.numpy()[0]
+    if spline_layer.mask is not None:
+        x = im * spline_layer.mask
     else:
         x = im
 
@@ -230,9 +240,9 @@ def plot_train_points(model, im):
 # __/ Main script \__________
 
 # Open original image
-xisf = XISF(filename)
+xisf = XISF(in_filepath)
 im_orig = xisf.read_image(0)
-_, bg_val_orig, _ = statistics(im_orig, "Original")
+_, im_orig_median, _ = statistics(im_orig, "Original")
 
 # Preprocessing uses a copy
 im = im_orig.copy()
@@ -242,7 +252,7 @@ num_to_nan(im)
 
 # Delinearize to stretch the background
 im, pedestal, scale, bg_val = delinearize(im)
-_, bg_val, _ = statistics(im, "Delinearized")
+_, im_median, _ = statistics(im, "Delinearized")
 
 # Downscale
 im = downscale(im)
@@ -265,19 +275,23 @@ plt.plot(history.history['loss'], label='Loss')
 # Visualize mask
 spline_layer = model.layers[1]
 if spline_layer.mask is not None:
-    plot_image_hist(model.layers[1].mask.numpy(), "Mask")
+    plot_image_hist(spline_layer.mask.numpy(), "Mask")
 
 
 # %%
 # Visualize fitted spline (background model)
-bg = y_pred[0,...]
-_ = statistics(bg, "Bg model")
-plot_image_hist(bg, "Background model")
+bg_hat = y_pred[0,...]
+_ = statistics(bg_hat, "Bg model")
+plot_image_hist(bg_hat, "Background model")
 
 
 # %%
 # Visualize final train points over the (masked) image
 plot_train_points(model, im)
+
+
+# %%
+plot_image_hist(im-bg_hat+im_median, "Bg subtracted (downsized, delinearized)")
 
 
 # %%
@@ -299,7 +313,7 @@ plot_train_points(model, im)
 # %%
 # Generate the final background model by interpolating the trained spline to the original image size
 bg_fullres = spline_layer.interpolate(im_orig.shape, chunks=config['downscaling_factor']**2)
-_ = statistics(bg, "Bg (full size)")
+_ = statistics(bg_fullres, "Bg (full size)")
 plot_image_hist(bg_fullres, "Background model (full size)")
 
 
@@ -324,21 +338,28 @@ im_final = im_orig - bg_fullres_linear
 im_final_min, _, _ = statistics(im_final, "Subtracted")
 
 # Visualize out of range (negative, really) values
+plt.figure(figsize=(16,10))
 plt.imshow(-im_final.clip(-1,0), cmap='gray')
 plt.title("Pixels with negative value after subtraction")
 
 # Apply pedestal so the final image has the same median value as the original
 im_final -= im_final_min
-im_final += bg_val_orig
+im_final += im_orig_median
 if im_final.max() > 1.0:
     im_final /= im_final.max()
 
 _ = statistics(im_final, "Final")
 
 # %%
+plt.figure(figsize=(16,10))
+plt.imshow(delinearize(im_final.copy(), 0.25)[0], cmap='gray')
+
+# %%
+os.makedirs(os.path.dirname(out_filepath), exist_ok=True)
+
 # Write final image and background model to file
-XISF.write(out_filename, im_final, xisf.get_images_metadata()[0], xisf.get_file_metadata())
-XISF.write(bg_filename, bg_fullres_linear)
+XISF.write(out_filepath, im_final, xisf.get_images_metadata()[0], xisf.get_file_metadata())
+XISF.write(bg_filepath, bg_fullres_linear)
 
 # %%
 # Experiment: variance 
