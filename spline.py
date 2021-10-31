@@ -77,65 +77,100 @@ class Spline(keras.layers.Layer):
         # If mask is given as a threshold, create the real mask (as ndarray) from the image
         if isinstance(self.mask, float): 
             threshold = self.mask
-            # TODO: (0.0 < self.im) es para evitar áreas sin señal, pero ´
+            # TODO: (0.0 < self.im) es para evitar áreas sin señal, pero
             # sólo se aplica si se define mask como umbral
-            self.mask = ((0.0 < self.im) & (self.im < threshold)).astype(np.float32) 
+            self.mask = ((0.001 < self.im) & (self.im < threshold)).astype(np.float32) 
             # 1 on pixels below threshold, 0 otherwise
 
         # The mask (given as attr, or determined by threshold) is assumed to be an ndarray (image)
         # Generate the pixel locations not masked
-        if self.mask is not None:
-            assert(self.mask.shape == self.im.shape)
-            idx = np.transpose(self.mask.squeeze(axis=-1).nonzero()) 
-                # idx = ndarray with unmasked pixel locations, shape=(number of unmasked pixels, 2)
-            #self.idx = idx # debug
+        # if self.mask is not None:
+        #     assert(self.mask.shape == self.im.shape)
+        #     idx = np.transpose(self.mask.squeeze(axis=-1).nonzero()) 
+        #         # idx = ndarray with unmasked pixel locations, shape=(number of unmasked pixels, 2)
+        #     #self.idx = idx # debug
 
-            # Save the mask as a tensor, for later use in loss function
-            self.mask = tf.constant(self.mask)
-        else:
-            idx = None
+        #     # Save the mask as a tensor, for later use in loss function
+        #     self.mask = tf.constant(self.mask)
+        # else:
+        #     idx = None
 
         # Generate train_coords (pixel locations) and then train_points (coords mapped to [0,1))
-        try:
-            # Sample randomly unmasked pixel locations
-            n_unmasked_pixels = idx.shape[0]
-            if n_unmasked_pixels == 0:
-                print("Warning: empty mask, ignoring")
+        # try:
+        #     # Sample randomly unmasked pixel locations
+        #     n_unmasked_pixels = idx.shape[0]
+        #     if n_unmasked_pixels == 0:
+        #         print("Warning: empty mask, ignoring")
              
-            random_sample = np.random.choice(n_unmasked_pixels, size=self.n_control_points, replace=False) 
-                # replace=False so we don't repeat pixel locations            
+        #     random_sample = np.random.choice(n_unmasked_pixels, size=self.n_control_points, replace=False) 
+        #         # replace=False so we don't repeat pixel locations            
             
-            # Get sampled pixel locations
-            train_coords = idx[random_sample]
+        #     # Get sampled pixel locations
+        #     train_coords = idx[random_sample]
 
-            # Map coords to [0,1). Explicit float32 dtype.
-            train_points = np.divide(train_coords, np.array([h, w]), dtype=np.float32) 
-            # Expand for batch axis
-            train_points = np.expand_dims(train_points, axis=0) 
-            # Create layer weights for train_points
-            self.train_points = tf.Variable(initial_value=train_points, trainable=True)
+        #     # Map coords to [0,1). Explicit float32 dtype.
+        #     train_points = np.divide(train_coords, np.array([h, w]), dtype=np.float32) 
+        #     # Expand for batch axis
+        #     train_points = np.expand_dims(train_points, axis=0) 
+        #     # Create layer weights for train_points
+        #     self.train_points = tf.Variable(initial_value=train_points, trainable=True)
 
-        except (AttributeError, ValueError):
+        # except (AttributeError, ValueError):
 
-            # ... then either
-            #   mask==None (idx is None => AttributeError at idx.shape)
-            # or 
-            #   mask is empty (n_unmasked_pixels == 0 => ValueError at np.random.choice)
-            # In these cases, generate train_points randomly distributed over ([0,1], [0,1]) range
-            # TODO: generar train_coords como enteros y luego hacer común el código de generar train_points?
-            train_points_initializer = tf.keras.initializers.RandomUniform(minval=0.0, maxval=1.0)
-            self.train_points = self.add_weight(
-                shape=(1, self.n_control_points, 2), initializer=train_points_initializer, trainable=True
-            )
-            train_coords = self.train_points.numpy().squeeze(axis=0)
-            train_coords = (train_coords * np.array([h, w])).astype(np.int32) # nearest pixel position
+        #     # ... then either
+        #     #   mask==None (idx is None => AttributeError at idx.shape)
+        #     # or 
+        #     #   mask is empty (n_unmasked_pixels == 0 => ValueError at np.random.choice)
+        #     # In these cases, generate train_points randomly distributed over ([0,1], [0,1]) range
+        #     # TODO: generar train_coords como enteros y luego hacer común el código de generar train_points?
+        #     train_points_initializer = tf.keras.initializers.RandomUniform(minval=0.0, maxval=1.0)
+        #     self.train_points = self.add_weight(
+        #         shape=(1, self.n_control_points, 2), initializer=train_points_initializer, trainable=True
+        #     )
+        #     train_coords = self.train_points.numpy().squeeze(axis=0)
+        #     train_coords = (train_coords * np.array([h, w])).astype(np.int32) # nearest pixel position
         
-        # w, v spline coefficients: initialize from actual image pixel values on the train_points 
-        # for faster convergence (much faster than random initialization)
-        # TODO: apply the mask here, to weight the initial train_values?
-        train_values = self.im[ train_coords[:,0], train_coords[:,1], 0 ]
-        # Expand for batch and output axis
+        # # w, v spline coefficients: initialize from actual image pixel values on the train_points 
+        # # for faster convergence (much faster than random initialization)
+        # # TODO: apply the mask here, to weight the initial train_values?
+        # train_values = self.im[ train_coords[:,0], train_coords[:,1], 0 ]
+        # # Expand for batch and output axis
+        # train_values = np.expand_dims(train_values, axis=(0,-1))
+
+        # --8<------
+        # train_points in grid
+        gy, gx = np.linspace(0, h-1, self.n_control_points)/h, np.linspace(0, w-1, self.n_control_points)/w
+        train_points = np.array(np.meshgrid(gy, gx)).T.reshape(1, -1, 2).astype(np.float32)
+        # TODO: random jitter?
+
+        # Create layer weights for train_points
+        self.train_points = tf.Variable(initial_value=train_points, trainable=True) 
+
+        # Get train_coords as the nearest pixel positions corresponding to train_points
+        train_coords = (np.squeeze(train_points, axis=0) * np.array([h, w])).astype(np.int32) # nearest pixel position
+
+        # Evaluate train_values from the image and the mask, using train_coords pixel positions
+        pixel_values = self.im[ train_coords[:,0], train_coords[:,1], 0 ]
+        #from scipy.signal import convolve2d        
+        #filter = np.ones((5, 5)) 
+        #filter /= filter.sum() # mean filter
+        #filtered = convolve2d(np.squeeze(self.im, axis=-1), filter, mode='same', boundary='symm')
+        #pixel_values = filtered[ train_coords[:,0], train_coords[:,1] ]
+
+        mask_values = self.mask[ train_coords[:,0], train_coords[:,1], 0 ]
+
+        # Initial train_values are evaluated as follows:
+        # - Fully unmasked pixels: actual pixel value
+        # - Fully masked pixels: estimated background value (median)
+        # - Partially masked pixels: linear combination of the above
+        bg_val = np.median(self.im)
+        train_values = mask_values * pixel_values + (1-mask_values) * bg_val
+
+        # Expand train_values for batch and output axis
         train_values = np.expand_dims(train_values, axis=(0,-1))
+
+        self.mask = tf.constant(self.mask)
+        # --8<------        
 
         # We use tfa.image._solve_interpolation for the initial spine coefficient values
         # TODO: make regularization_weight an argument?
@@ -152,13 +187,10 @@ class Spline(keras.layers.Layer):
     def call(self, inputs):
         h, w, _ = self.shape
 
-        # Clip the train_points to the [0,1] box to constrain them
-        # TODO: make this optional?
-        #train_points = keras.backend.clip(self.train_points, 0.0, 1.0)
-        train_points = self.train_points
-
         # Broadcast the weights and query_points to the batch_size
-        train_points = tf.repeat(train_points, self.batch_size, axis=0)
+        #   TODO: clip the train_points to the [0,1] box to constrain them?
+        #     self.train_points --> tf.clip_by_value(self.train_points, 0.0, 1.0)
+        train_points = tf.repeat(self.train_points, self.batch_size, axis=0)
         w_weights = tf.repeat(self.ww, self.batch_size, axis=0)
         v_weights = tf.repeat(self.vw, self.batch_size, axis=0)
         query_points = tf.repeat(self.query_points, self.batch_size, axis=0)
