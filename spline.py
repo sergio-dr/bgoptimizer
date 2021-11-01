@@ -28,12 +28,21 @@ class Spline(keras.layers.Layer):
     The mask is stored in the layer (Spline.mask) as a tensor so you can use also
     for applying it on custom loss functions. 
 
+    order and initial_regularization correspond to tfa.image.interpolate_spline() 
+    order and regularization_weight arguments, respectively. 
+
     Attributes:
         im: image (ndarray) to fit the spline to; expected shape is (h, w, 1).
-        mask: if float, defines the threshold value for the mask; if ndarray, it has to
-          have the same shape as im; if None (default), no mask is used.
-        n_control_points: number of control points for the spline (16 by default)
-        order: 2 (thin-plate spline) or 3 (bicubic spline, default)
+        mask: if float, defines the threshold value for the mask; if tuple(float,float),
+           defines minimum and maximum threshold values for the mask (useful for ignoring 
+           missing values encoded below the pedestal); if ndarray, it has to have the same
+           shape as im, and its values should be in the [0.0, 1.0] range. By default it is 
+           1.0, i.e., no mask is used. 
+        n_control_points: number of control points for the spline (64 by default)
+        order: 2 (thin-plate spline, default) or 3 (bicubic spline)
+        initializer: either 'random' or 'grid', for initial train points distribution
+        initial_regularization: float for smoothness of the initial spline (0.1 by 
+          default); 0.0 means no smoothness. 
 
     Input shape:
         Ignored, except for the batch_size.
@@ -58,13 +67,31 @@ class Spline(keras.layers.Layer):
     #   n = number of train points (parameter of the layer)
     #   k = output values dimensions (1 in this case)
 
-    def __init__(self, im, mask=None, n_control_points=16, order=3, **kwargs):
+    def __init__(self, im, mask=1.0, n_control_points=64, order=2, initializer='random', initial_spline_regularization=0.1, **kwargs):
         super(Spline, self).__init__(**kwargs)
         self.im = im
-        self.mask = mask
+
+        if isinstance(mask, np.ndarray):
+            if im.shape == mask.shape:
+                self.mask = mask
+            else:
+                raise ValueError("if mask is a ndarray, it should have the same shape as im")
+        elif isinstance(mask, tuple):
+            try:
+                self.mask = float(mask[0]), float(mask[1])
+            except:
+                raise ValueError("if mask is a tuple, it should be given as (float, float)")
+        elif isinstance(mask, float):
+            self.mask = (0.0, mask) # Mask as thresholds range (thr_min, thr_max) or ndarray
+        else:
+            raise ValueError("mask should be a float, tuple(float, foat), or ndarray")
+        # From now on, self.mask is either a tuple (float, float) or a ndarray.
+
         self.shape = im.shape
         self.n_control_points = n_control_points
         self.order = order
+        self.initializer = initializer
+        self.initial_spline_regularization = initial_spline_regularization
 
     def build(self, input_shape):
         self.batch_size = input_shape[0]
@@ -72,93 +99,42 @@ class Spline(keras.layers.Layer):
 
         # query_points: generate every pixel position, on the ([0,1], [0,1]) range
         y, x = np.linspace(0, 1, h, endpoint=False), np.linspace(0, 1, w, endpoint=False)
-        self.query_points = tf.constant(np.array(np.meshgrid(y, x)).T.reshape(1, -1, 2).astype(np.float32)) 
+        query_points = np.array(np.meshgrid(y, x)).T.astype(np.float32)
+        self.query_points = tf.constant(query_points.reshape(1, -1, 2)) # Add batch axis, convert to tensor 
 
-        # If mask is given as a threshold, create the real mask (as ndarray) from the image
-        if isinstance(self.mask, float): 
-            threshold = self.mask
-            # TODO: (0.0 < self.im) es para evitar áreas sin señal, pero
-            # sólo se aplica si se define mask como umbral
-            self.mask = ((0.001 < self.im) & (self.im < threshold)).astype(np.float32) 
-            # 1 on pixels below threshold, 0 otherwise
-
-        # The mask (given as attr, or determined by threshold) is assumed to be an ndarray (image)
-        # Generate the pixel locations not masked
-        # if self.mask is not None:
-        #     assert(self.mask.shape == self.im.shape)
-        #     idx = np.transpose(self.mask.squeeze(axis=-1).nonzero()) 
-        #         # idx = ndarray with unmasked pixel locations, shape=(number of unmasked pixels, 2)
-        #     #self.idx = idx # debug
-
-        #     # Save the mask as a tensor, for later use in loss function
-        #     self.mask = tf.constant(self.mask)
-        # else:
-        #     idx = None
-
-        # Generate train_coords (pixel locations) and then train_points (coords mapped to [0,1))
-        # try:
-        #     # Sample randomly unmasked pixel locations
-        #     n_unmasked_pixels = idx.shape[0]
-        #     if n_unmasked_pixels == 0:
-        #         print("Warning: empty mask, ignoring")
-             
-        #     random_sample = np.random.choice(n_unmasked_pixels, size=self.n_control_points, replace=False) 
-        #         # replace=False so we don't repeat pixel locations            
-            
-        #     # Get sampled pixel locations
-        #     train_coords = idx[random_sample]
-
-        #     # Map coords to [0,1). Explicit float32 dtype.
-        #     train_points = np.divide(train_coords, np.array([h, w]), dtype=np.float32) 
-        #     # Expand for batch axis
-        #     train_points = np.expand_dims(train_points, axis=0) 
-        #     # Create layer weights for train_points
-        #     self.train_points = tf.Variable(initial_value=train_points, trainable=True)
-
-        # except (AttributeError, ValueError):
-
-        #     # ... then either
-        #     #   mask==None (idx is None => AttributeError at idx.shape)
-        #     # or 
-        #     #   mask is empty (n_unmasked_pixels == 0 => ValueError at np.random.choice)
-        #     # In these cases, generate train_points randomly distributed over ([0,1], [0,1]) range
-        #     # TODO: generar train_coords como enteros y luego hacer común el código de generar train_points?
-        #     train_points_initializer = tf.keras.initializers.RandomUniform(minval=0.0, maxval=1.0)
-        #     self.train_points = self.add_weight(
-        #         shape=(1, self.n_control_points, 2), initializer=train_points_initializer, trainable=True
-        #     )
-        #     train_coords = self.train_points.numpy().squeeze(axis=0)
-        #     train_coords = (train_coords * np.array([h, w])).astype(np.int32) # nearest pixel position
+        # if mask is given as a threshold range, convert it to ndarray
+        if isinstance(self.mask, tuple): 
+            thr_min, thr_max = self.mask
+            self.mask = ((thr_min <= self.im) & (self.im <= thr_max)).astype(np.float32)
         
-        # # w, v spline coefficients: initialize from actual image pixel values on the train_points 
-        # # for faster convergence (much faster than random initialization)
-        # # TODO: apply the mask here, to weight the initial train_values?
-        # train_values = self.im[ train_coords[:,0], train_coords[:,1], 0 ]
-        # # Expand for batch and output axis
-        # train_values = np.expand_dims(train_values, axis=(0,-1))
+        # Checks
+        assert isinstance(self.mask, np.ndarray) # At this point, mask should be a ndarray
+        assert self.mask.shape == self.im.shape  # At this point, mask and shape should have the same shape
+        
+        if self.initializer == 'random':
+            # Generate train_points randomly distributed over [0,1) box
+            train_points_initializer = tf.keras.initializers.RandomUniform(minval=0.0, maxval=1.0)
+            self.train_points = self.add_weight(
+                shape=(1, self.n_control_points, 2), initializer=train_points_initializer, trainable=True
+            )
+        elif self.initializer == 'grid':
+            n_points_per_axis = np.round(np.sqrt(self.n_control_points))
+            gy, gx = np.linspace(0, h-1, n_points_per_axis)/h, np.linspace(0, w-1, n_points_per_axis)/w
+            train_points = np.array(np.meshgrid(gy, gx)).T.astype(np.float32)
+            #   TODO: add random jitter? training most probably jitter them anyway
 
-        # --8<------
-        # train_points in grid
-        gy, gx = np.linspace(0, h-1, self.n_control_points)/h, np.linspace(0, w-1, self.n_control_points)/w
-        train_points = np.array(np.meshgrid(gy, gx)).T.reshape(1, -1, 2).astype(np.float32)
-        # TODO: random jitter?
+            # Add batch axis, create layer weights for train_points
+            self.train_points = tf.Variable(initial_value=train_points.reshape(1, -1, 2), trainable=True) 
+        else:
+            raise ValueError("initializer should be either 'random' or 'grid'")
 
-        # Create layer weights for train_points
-        self.train_points = tf.Variable(initial_value=train_points, trainable=True) 
+        # Get pixel locations corresponding to the train_points
+        train_coords = self.train_points.numpy().squeeze(axis=0)
+        train_coords = (train_coords * np.array([h, w])).astype(np.int32) # nearest pixel position
 
-        # Get train_coords as the nearest pixel positions corresponding to train_points
-        train_coords = (np.squeeze(train_points, axis=0) * np.array([h, w])).astype(np.int32) # nearest pixel position
-
-        # Evaluate train_values from the image and the mask, using train_coords pixel positions
+        # Evaluate pixel values from the image and the mask, using train_coords pixel positions
         pixel_values = self.im[ train_coords[:,0], train_coords[:,1], 0 ]
-        #from scipy.signal import convolve2d        
-        #filter = np.ones((5, 5)) 
-        #filter /= filter.sum() # mean filter
-        #filtered = convolve2d(np.squeeze(self.im, axis=-1), filter, mode='same', boundary='symm')
-        #pixel_values = filtered[ train_coords[:,0], train_coords[:,1] ]
-
         mask_values = self.mask[ train_coords[:,0], train_coords[:,1], 0 ]
-
         # Initial train_values are evaluated as follows:
         # - Fully unmasked pixels: actual pixel value
         # - Fully masked pixels: estimated background value (median)
@@ -169,13 +145,13 @@ class Spline(keras.layers.Layer):
         # Expand train_values for batch and output axis
         train_values = np.expand_dims(train_values, axis=(0,-1))
 
-        self.mask = tf.constant(self.mask)
-        # --8<------        
+        # Convert im, mask to tensors
+        self.im, self.mask = tf.constant(self.im), tf.constant(self.mask)       
 
         # We use tfa.image._solve_interpolation for the initial spine coefficient values
         # TODO: make regularization_weight an argument?
         ww, vw = _solve_interpolation(
-            self.train_points, train_values, self.order, regularization_weight=0.1
+            self.train_points, train_values, self.order, regularization_weight=self.initial_spline_regularization
         ) 
         # Create layer weights for w and v spline coefficients
         self.ww = tf.Variable(initial_value=ww, trainable=True)
