@@ -2,7 +2,7 @@ import tensorflow as tf
 from tensorflow_addons.image.interpolate_spline import _apply_interpolation, _solve_interpolation
 from tensorflow import keras
 import numpy as np
-import math
+
 
 class Spline(keras.layers.Layer):
     """
@@ -88,6 +88,7 @@ class Spline(keras.layers.Layer):
         # From now on, self.mask is either a tuple (float, float) or a ndarray.
 
         self.shape = im.shape
+        self.bg_val = np.median(self.im)        
         self.n_control_points = n_control_points
         self.order = order
         self.initializer = initializer
@@ -139,8 +140,7 @@ class Spline(keras.layers.Layer):
         # - Fully unmasked pixels: actual pixel value
         # - Fully masked pixels: estimated background value (median)
         # - Partially masked pixels: linear combination of the above
-        bg_val = np.median(self.im)
-        train_values = mask_values * pixel_values + (1-mask_values) * bg_val
+        train_values = mask_values * pixel_values + (1-mask_values) * self.bg_val
 
         # Expand train_values for batch and output axis
         train_values = np.expand_dims(train_values, axis=(0,-1))
@@ -199,7 +199,7 @@ class Spline(keras.layers.Layer):
         query_points = tf.constant(np.array(np.meshgrid(y, x)).T.reshape(1, -1, 2).astype(np.float32)) 
 
         # Use ww & vw on _apply_interpolation to generate the spline
-        chunk_sz = math.ceil((h*w) / chunks)
+        chunk_sz = np.ceil((h*w) / chunks)
         query_values = []
         for i in range(chunks):
             start = i*chunk_sz

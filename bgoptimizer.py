@@ -1,8 +1,6 @@
 # %%
-%load_ext autoreload
-%autoreload 2
-
 import os
+import time
 from xisf import XISF
 import numpy as np
 import tensorflow as tf
@@ -24,19 +22,19 @@ import pandas as pd
 # __/ Script parameters \__________
 # TODO: command line args
 base_dir = "S:\\src\\bg-model"
-in_dir = "in\\orion"
-in_filename = "O3.xisf" 
+in_dir = "in\\noram"
+in_filename = "integration_O3.xisf" 
 in_filepath = os.path.join(base_dir, in_dir, in_filename)
-out_dir = "out\\orion"
+out_dir = "out\\noram"
 out_filepath = os.path.join(base_dir, out_dir, in_filename)
 bg_filepath = os.path.join(base_dir, out_dir, "bg_"+in_filename)
 
 config = {
-    'downscaling_factor': 8, 'downscaling_func': 'mean',
+    'downscaling_factor': 8, 'downscaling_func': 'median',
     'delinearization_quantile': 0.95,
-    'N': 8,
+    'N': 32,
     'O': 2,
-    'threshold': 0.9,
+    'threshold': (0.001, 0.7),
     'B': 1,
     'alpha': 5,
     'lr': 0.001,
@@ -120,15 +118,19 @@ def linearize(data, pedestal, scale, bg_val, bg_target_val=0.25):
 # %%
 
 # __/ Custom loss \__________
-# TODO: meter esta función en la capa spline ??
 def bg_loss_alpha(y_true, y_pred, model, alpha):
-    # Residuals
-    r = y_true - y_pred
+    # Residuals: y_true is im, y_pred is the generated background model (spline)
+    r_nonmasked = y_true - y_pred
 
-    # Apply mask of residuals
+    # Get mask
     spline_layer = model.layers[1]
-    if spline_layer.mask is not None:
-        r *= spline_layer.mask
+    mask = spline_layer.mask
+
+    # Residuals for fully masked pixels (against the estimated global background value)
+    r_masked = spline_layer.bg_val - y_pred
+
+    # Apply mask on residuals, i.e, (partially) ignore masked pixels
+    r = mask*r_nonmasked + (1-mask)*r_masked
 
     abs_r = tf.math.abs(r)
 
@@ -136,15 +138,17 @@ def bg_loss_alpha(y_true, y_pred, model, alpha):
     # tf.math.log(1+r*r)
     # 2*tf.math.reciprocal( 1+tf.math.exp(-15*r*r))-1 # tipo sigmoide
     #   https://www.wolframalpha.com/input/?i=Plot%5B2%2F%281%2Be%5E%28-15*x%5E2%29%29-1%2C+x+%3D+-1+to+1%5D
-    error = tf.math.reduce_mean( abs_r , axis=-1) 
+    error = tf.math.reduce_mean(abs_r, axis=-1) 
 
-    # TODO: nombrar estos penalties
-    penalty = tf.math.reduce_mean(abs_r - r, axis=-1)
-    negative_bg = tf.math.reduce_mean(tf.math.abs(y_pred) - y_pred) # Éste aplica independientemente de la máscara
+    # "Overshoot" penalty: if the estimated background is higher than the actual pixel value
+    overshoot = tf.math.reduce_mean(abs_r - r, axis=-1)
 
-    #return error + alpha*penalty + 0.1*tf.math.reduce_mean(tf.math.square(spline_layer.ww)) #+ tf.math.reduce_mean(tf.math.square(spline_layer.vw))
-    return error + alpha*(penalty + negative_bg) #+ 0.1*tf.math.reduce_mean(tf.math.square(spline_layer.ww)) #+ tf.math.reduce_mean(tf.math.square(spline_layer.vw))
-    #return tf.math.log(0.001 + error + alpha*(penalty + negative_bg))
+    # Negative background penalty: if the estimated background is negative
+    negative_bg = tf.math.reduce_mean(tf.math.abs(y_pred) - y_pred) 
+
+    #return error + alpha*overshoot + 0.1*tf.math.reduce_mean(tf.math.square(spline_layer.ww)) #+ tf.math.reduce_mean(tf.math.square(spline_layer.vw))
+    return error + alpha*(overshoot + negative_bg) #+ 0.1*tf.math.reduce_mean(tf.math.square(spline_layer.ww)) #+ tf.math.reduce_mean(tf.math.square(spline_layer.vw))
+    #return tf.math.log(0.001 + error + alpha*(overshoot + negative_bg))
 
 
 # __/ Callbacks \__________
@@ -266,7 +270,11 @@ plot_image_hist(im, "Delinearized & downscaled")
 
 # %%
 # Fit spline
+t_start = time.perf_counter()
 y_pred, model, history = fit_spline(im, config)
+t_end = time.perf_counter()
+print(f"Elapsed {t_end-t_start:.2f} seconds")
+
 print(f"N, B, epochs, loss: {config['N']}, {config['B']}, {len(history.history['loss'])}, {min(history.history['loss']):.5f}")
 plt.plot(history.history['loss'], label='Loss')
 
@@ -312,7 +320,11 @@ plot_image_hist(im-bg_hat+im_median, "Bg subtracted (downsized, delinearized)")
 
 # %%
 # Generate the final background model by interpolating the trained spline to the original image size
+t_start = time.perf_counter()
 bg_fullres = spline_layer.interpolate(im_orig.shape, chunks=config['downscaling_factor']**2)
+t_end = time.perf_counter()
+print(f"Elapsed {t_end-t_start:.2f} seconds")
+
 _ = statistics(bg_fullres, "Bg (full size)")
 plot_image_hist(bg_fullres, "Background model (full size)")
 
