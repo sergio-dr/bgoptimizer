@@ -199,7 +199,7 @@ class Spline(keras.layers.Layer):
         query_points = tf.constant(np.array(np.meshgrid(y, x)).T.reshape(1, -1, 2).astype(np.float32)) 
 
         # Use ww & vw on _apply_interpolation to generate the spline
-        chunk_sz = np.ceil((h*w) / chunks)
+        chunk_sz = np.ceil((h*w) / chunks).astype(np.int32)
         query_values = []
         for i in range(chunks):
             start = i*chunk_sz

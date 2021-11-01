@@ -119,18 +119,18 @@ def linearize(data, pedestal, scale, bg_val, bg_target_val=0.25):
 
 # __/ Custom loss \__________
 def bg_loss_alpha(y_true, y_pred, model, alpha):
-    # Residuals: y_true is im, y_pred is the generated background model (spline)
-    r_nonmasked = y_true - y_pred
-
-    # Get mask
+    # In this model, y_true is im, y_pred is the generated background model (spline)
+    
+    # Get mask and bg_val from the spline layer
     spline_layer = model.layers[1]
     mask = spline_layer.mask
-
-    # Residuals for fully masked pixels (against the estimated global background value)
-    r_masked = spline_layer.bg_val - y_pred
-
-    # Apply mask on residuals, i.e, (partially) ignore masked pixels
-    r = mask*r_nonmasked + (1-mask)*r_masked
+    bg_val = spline_layer.bg_val
+    
+    # Apply mask (like in Spline.build())
+    masked_y_true = mask*y_true + (1-mask)*bg_val
+    
+    # Residuals
+    r = masked_y_true - y_pred
 
     abs_r = tf.math.abs(r)
 
@@ -146,7 +146,6 @@ def bg_loss_alpha(y_true, y_pred, model, alpha):
     # Negative background penalty: if the estimated background is negative
     negative_bg = tf.math.reduce_mean(tf.math.abs(y_pred) - y_pred) 
 
-    #return error + alpha*overshoot + 0.1*tf.math.reduce_mean(tf.math.square(spline_layer.ww)) #+ tf.math.reduce_mean(tf.math.square(spline_layer.vw))
     return error + alpha*(overshoot + negative_bg) #+ 0.1*tf.math.reduce_mean(tf.math.square(spline_layer.ww)) #+ tf.math.reduce_mean(tf.math.square(spline_layer.vw))
     #return tf.math.log(0.001 + error + alpha*(overshoot + negative_bg))
 
