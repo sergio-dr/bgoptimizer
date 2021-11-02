@@ -1,31 +1,43 @@
 # %%
+import platform
 import os
 import time
 from xisf import XISF
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
+import tensorflow_addons as tfa
 from spline import Spline
 
 # For preprocessing
+import skimage
 from skimage.measure import block_reduce
 
 # For visualization only
 import matplotlib.pyplot as plt
-from PIL import Image 
+from skimage import io
 
 # For experiments only
 import pandas as pd 
+
+# %%
+print("python:", platform.python_version())
+print("tensorflow:", tf.__version__)
+print("tensorflow_addons:", tfa.__version__)
+print("keras:", keras.__version__)
+print("numpy:", np.__version__)
+print("skimage:", skimage.__version__)
+
 
 # %%
 
 # __/ Script parameters \__________
 # TODO: command line args
 base_dir = "S:\\src\\bg-model"
-in_dir = "in\\noram"
-in_filename = "integration_O3.xisf" 
+in_dir = "in\\pleyades"
+in_filename = "masterLight_BINNING_1_FILTER_NoFilter_EXPTIME_120_3_integration_R.xisf" 
 in_filepath = os.path.join(base_dir, in_dir, in_filename)
-out_dir = "out\\noram"
+out_dir = "out\\pleyades"
 out_filepath = os.path.join(base_dir, out_dir, in_filename)
 bg_filepath = os.path.join(base_dir, out_dir, "bg_"+in_filename)
 
@@ -34,11 +46,12 @@ config = {
     'delinearization_quantile': 0.95,
     'N': 32,
     'O': 2,
-    'threshold': (0.001, 0.7),
+    'threshold': (0.001, 0.95),
+    'initializer': 'random', 
+    'alpha': 5,    
     'B': 1,
-    'alpha': 5,
     'lr': 0.001,
-    'epochs': 10000,
+    'epochs': 1000,
 }
 
 # %%
@@ -118,7 +131,7 @@ def linearize(data, pedestal, scale, bg_val, bg_target_val=0.25):
 # %%
 
 # __/ Custom loss \__________
-def bg_loss_alpha(y_true, y_pred, model, alpha):
+def bg_loss_alpha(y_true, y_pred, model, alpha): # beta=0.1):
     # In this model, y_true is im, y_pred is the generated background model (spline)
     
     # Get mask and bg_val from the spline layer
@@ -131,13 +144,9 @@ def bg_loss_alpha(y_true, y_pred, model, alpha):
     
     # Residuals
     r = masked_y_true - y_pred
-
     abs_r = tf.math.abs(r)
 
-    # TODO: mae abs_r vs mse r*r ...
-    # tf.math.log(1+r*r)
-    # 2*tf.math.reciprocal( 1+tf.math.exp(-15*r*r))-1 # tipo sigmoide
-    #   https://www.wolframalpha.com/input/?i=Plot%5B2%2F%281%2Be%5E%28-15*x%5E2%29%29-1%2C+x+%3D+-1+to+1%5D
+    # Error loss
     error = tf.math.reduce_mean(abs_r, axis=-1) 
 
     # "Overshoot" penalty: if the estimated background is higher than the actual pixel value
@@ -146,7 +155,10 @@ def bg_loss_alpha(y_true, y_pred, model, alpha):
     # Negative background penalty: if the estimated background is negative
     negative_bg = tf.math.reduce_mean(tf.math.abs(y_pred) - y_pred) 
 
-    return error + alpha*(overshoot + negative_bg) #+ 0.1*tf.math.reduce_mean(tf.math.square(spline_layer.ww)) #+ tf.math.reduce_mean(tf.math.square(spline_layer.vw))
+    # Spline complexity penalty
+    #complexity = tf.math.reduce_mean(tf.math.square(spline_layer.ww)) + tf.math.reduce_mean(tf.math.square(spline_layer.vw))
+
+    return error + alpha*(overshoot + negative_bg) #+ beta*complexity
     #return tf.math.log(0.001 + error + alpha*(overshoot + negative_bg))
 
 
@@ -176,14 +188,20 @@ def lr_sched(epoch, lr):
 lrsched = tf.keras.callbacks.LearningRateScheduler(lr_sched, verbose=True)
 
 
-class PredictionCallback(tf.keras.callbacks.Callback):    
-  def on_epoch_end(self, epoch, logs={}):
-    y_pred = self.model.predict_on_batch(X)
-    final = y_true[0,...,0] - y_pred[0,...,0]
-    final -= final.min()
-    final /= final.max()
-    im = Image.fromarray( (255 * final).astype(np.uint8) )
-    im.save("out\\Epoch_%03d.png" % (epoch,))
+class PredictionCallback(tf.keras.callbacks.Callback): 
+    def __init__(self):
+        os.makedirs(out_dir, exist_ok=True)
+
+    def on_epoch_end(self, epoch, logs={}):
+        X = np.zeros(config['B'])
+        y_true = self.model.layers[1].im.numpy()
+        y_pred = self.model.predict_on_batch(X).numpy()[0,...]
+        final = y_true - y_pred
+        final -= final.min()
+        final /= final.max()
+        im = (255 * final).astype(np.uint8)
+        im_fname = os.path.join(out_dir, f"Epoch_{epoch:03d}.png")
+        io.imsave(im_fname, im)    
 
 prediction = PredictionCallback()
 
@@ -192,32 +210,49 @@ callbacks = [earlystop, reduce_lr] #, prediction] #, lrsched]
 
 # __/ Model fit and predict (spline fitting) \__________
 def fit_spline(im, config):
-    N, O, alpha, threshold = config['N'], config['O'],  config['alpha'], config['threshold']
+    # Mask definition
+    threshold = config['threshold']
+
+    # Spline complexity params
+    N, O = config['N'], config['O']
+    # Spline control points initialization
+    initializer = config['initializer']
+    # Spline regularization parameter for loss function
+    alpha = config['alpha']
+
+    # Training params
     B, lr, epochs = config['B'], config['lr'], config['epochs']
 
+    # y_true is im
     im_orig = np.expand_dims(im, axis=0)
     y_true = im_orig.repeat(B, axis=0)
+
+    # Dummy input
     X = np.zeros(B) 
-    #print(im_orig.shape, y_true.shape, X.shape)
 
+    # Model
     x = keras.layers.Input(shape=(), name='input_layer', batch_size=B)
-    y = Spline(im, mask=threshold, n_control_points=N, order=O)(x)
+    y = Spline(im, mask=threshold, n_control_points=N, order=O, initializer=initializer)(x)
     model = keras.Model(inputs=x, outputs=y, name="bgmodel")
-
-    plot_train_points(model, im)
-    plt.show()
     model.summary()
 
+    # Initial train_points positions
+    #plot_train_points(model, im)
+    #plt.show()
+
+    # Model compilation with custom loss
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
     bg_loss = lambda y_true, y_pred: bg_loss_alpha(y_true, y_pred, model, alpha) 
     model.compile(optimizer, loss=bg_loss)
 
+    # Model fit
     history = model.fit(
         x=X, y=y_true, 
         epochs=epochs, 
         callbacks=callbacks
     )
 
+    # Optimized background model 
     y_pred = model.predict(X)
 
     return y_pred, model, history
