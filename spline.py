@@ -94,6 +94,13 @@ class Spline(keras.layers.Layer):
         self.initializer = initializer
         self.initial_spline_regularization = initial_spline_regularization
 
+
+    @staticmethod
+    def _apply_mask(im, thresholds):
+        thr_min, thr_max = thresholds
+        return ((thr_min <= im) & (im <= thr_max)).astype(np.float32)
+
+
     def build(self, input_shape):
         self.batch_size = input_shape[0]
         h, w, _ = self.shape 
@@ -105,8 +112,7 @@ class Spline(keras.layers.Layer):
 
         # if mask is given as a threshold range, convert it to ndarray
         if isinstance(self.mask, tuple): 
-            thr_min, thr_max = self.mask
-            self.mask = ((thr_min <= self.im) & (self.im <= thr_max)).astype(np.float32)
+            self.mask = self._apply_mask(self.im, self.mask)
         
         # Checks
         assert isinstance(self.mask, np.ndarray) # At this point, mask should be a ndarray

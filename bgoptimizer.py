@@ -21,6 +21,8 @@ from skimage import io
 import pandas as pd 
 
 # %%
+print("\n\n__/ Environment \__________")
+
 print("python:", platform.python_version())
 print("tensorflow:", tf.__version__)
 print("tensorflow_addons:", tfa.__version__)
@@ -67,10 +69,11 @@ def statistics(im, title=""):
 
 
 def plot_image_hist(im, title=""):
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(16,12), gridspec_kw={'height_ratios': [4, 1]})
-    _ = ax0.imshow(im, cmap='gray', vmin=0, vmax=1)
+    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(16,14), gridspec_kw={'height_ratios': [4, 1]})
+    _ = ax0.imshow(im[...,0], cmap='gray', vmin=0, vmax=1)
     _ = ax1.hist(im.ravel(), bins=100)
-    fig.suptitle(title, fontsize=12)
+    fig.suptitle(title, fontsize=24)
+    fig.tight_layout()
 
 
 def downscale(data):
@@ -245,17 +248,22 @@ def fit_spline(im, config):
     bg_loss = lambda y_true, y_pred: bg_loss_alpha(y_true, y_pred, model, alpha) 
     model.compile(optimizer, loss=bg_loss)
 
+    print("Fitting spline...")
+    t_start = time.perf_counter()
     # Model fit
     history = model.fit(
         x=X, y=y_true, 
         epochs=epochs, 
-        callbacks=callbacks
+        callbacks=callbacks,
+        verbose=0
     )
+    t_end = time.perf_counter()
+    print(f"Done in {t_end-t_start:.2f} seconds")
 
     # Optimized background model 
     y_pred = model.predict(X)
 
-    return y_pred, model, history
+    return y_pred[0,...], model, history
 
 
 # __/ Draw spline train points \__________
@@ -269,13 +277,15 @@ def plot_train_points(model, im):
         x = im
 
     fig, ax = plt.subplots(figsize=(16,8))
-    ax.imshow(x, cmap='gray')
+    ax.imshow(x[...,0], cmap='gray')
     ax.plot(train_points[:,1]*w, train_points[:,0]*h, 'go', fillstyle='none')
 
 
 # %%
 
 # __/ Main script \__________
+
+print("\n\n__/ Preprocessing \__________")
 
 # Open original image
 xisf = XISF(in_filepath)
@@ -299,30 +309,28 @@ _ = statistics(im, "Downscaled")
 # Replace NaNs
 np.nan_to_num(im, copy=False)
 
+# Visualize preprocessed image
 plot_image_hist(im, "Delinearized & downscaled")
+
+# Preview mask
+plot_image_hist(Spline._apply_mask(im, config['threshold']), "Mask")
 
 
 # %%
+print("\n\n__/ Background modeling \__________")
+
 # Fit spline
-t_start = time.perf_counter()
-y_pred, model, history = fit_spline(im, config)
-t_end = time.perf_counter()
-print(f"Elapsed {t_end-t_start:.2f} seconds")
+bg_hat, model, history = fit_spline(im, config)
 
 print(f"N, B, epochs, loss: {config['N']}, {config['B']}, {len(history.history['loss'])}, {min(history.history['loss']):.5f}")
+
+plt.figure(figsize=(10, 3))
 plt.plot(history.history['loss'], label='Loss')
-
-
-#%%
-# Visualize mask
-spline_layer = model.layers[1]
-if spline_layer.mask is not None:
-    plot_image_hist(spline_layer.mask.numpy(), "Mask")
+plt.title('Loss')
 
 
 # %%
 # Visualize fitted spline (background model)
-bg_hat = y_pred[0,...]
 _ = statistics(bg_hat, "Bg model")
 plot_image_hist(bg_hat, "Background model")
 
@@ -337,23 +345,10 @@ plot_image_hist(im-bg_hat+im_median, "Bg subtracted (downsized, delinearized)")
 
 
 # %%
-#final = im - bg
-#plt.figure(figsize=(16,10))
-#plt.imshow(final, cmap='gray')
-#print("Range: ", final.min(), final.max())
+print("\n\n__/ Full-size background model & subtracted image \__________")
 
-
-# %%
-#plt.imshow(-final.clip(-1,0), cmap='gray')
-# TODO: salen valores negativos, es necesario hacer final -= final.min() para ajustar el 0. 
-
-# %%
-#final -= final.min()
-#if final.max() > 1:
-#    final /= final.max()
-
-# %%
 # Generate the final background model by interpolating the trained spline to the original image size
+spline_layer = model.layers[1]
 t_start = time.perf_counter()
 bg_fullres = spline_layer.interpolate(im_orig.shape, chunks=config['downscaling_factor']**2)
 t_end = time.perf_counter()
@@ -361,17 +356,6 @@ print(f"Elapsed {t_end-t_start:.2f} seconds")
 
 _ = statistics(bg_fullres, "Bg (full size)")
 plot_image_hist(bg_fullres, "Background model (full size)")
-
-
-# %%
-# Stretched final image
-#final_fullres = delinearize(im_orig)[0]
-#np.nan_to_num(final_fullres, copy=False)
-#final_fullres -= bg_fullres
-#final_fullres -= final_fullres.min()
-#if final_fullres.max() > 1:
-#    final_fullres /= final.max()
-#plt.imshow(final_fullres, vmin=0, vmax=1)
 
 
 # %%
@@ -385,7 +369,7 @@ im_final_min, _, _ = statistics(im_final, "Subtracted")
 
 # Visualize out of range (negative, really) values
 plt.figure(figsize=(16,10))
-plt.imshow(-im_final.clip(-1,0), cmap='gray')
+plt.imshow(-im_final.clip(-1,0)[...,0], cmap='gray')
 plt.title("Pixels with negative value after subtraction")
 
 # Apply pedestal so the final image has the same median value as the original
@@ -398,7 +382,7 @@ _ = statistics(im_final, "Final")
 
 # %%
 plt.figure(figsize=(16,10))
-plt.imshow(delinearize(im_final.copy(), 0.25)[0], cmap='gray')
+plt.imshow(delinearize(im_final.copy(), 0.25)[0][...,0], cmap='gray')
 
 # %%
 os.makedirs(os.path.dirname(out_filepath), exist_ok=True)
