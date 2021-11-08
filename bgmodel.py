@@ -164,10 +164,10 @@ class BgModel:
         cfg, h = self.config, self.history
         print(f"N, B, epochs, loss: {cfg['N']}, {cfg['B']}, {len(h.history['loss'])}, {min(h.history['loss']):.5f}")
 
-        plt.figure(figsize=(10, 3))
+        fig = plt.figure(figsize=(10, 3))
         plt.plot(h.history['loss'], label='Loss')
         plt.title('Loss')
-        plt.show()
+        fig.show()
 
 
     def interpolate_to(self, shape):

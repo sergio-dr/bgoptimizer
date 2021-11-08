@@ -155,8 +155,9 @@ bg_hat_fr_lin = improc.inverse_transform(bg_hat_fr_nl)
 im_hat_fr_lin = improc.subtract_safe(im_fr_lin, bg_hat_fr_lin)
 
 #   Preview background-subtracted image
-plt.figure(figsize=(16,10))
+fig = plt.figure(figsize=(16,10))
 plt.imshow(improc._delinearize(im_hat_fr_lin.copy(), 0.25)[...,0], cmap='gray')
+fig.show()
 
 # %%
 # Write background-subtracted image and the background model to file
@@ -174,3 +175,4 @@ print(f"Writing {bg_filepath}... ")
 XISF.write(bg_filepath, bg_hat_fr_lin)
 print("done.")
 
+plt.show()

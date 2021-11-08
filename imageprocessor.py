@@ -147,3 +147,4 @@ class ImageProcessor:
 
         fig.suptitle(title, fontsize=24)
         fig.tight_layout()
+        fig.show()

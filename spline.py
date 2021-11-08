@@ -237,4 +237,4 @@ class Spline(keras.layers.Layer):
         fig = plt.figure(figsize=(16,8))
         plt.imshow(np.squeeze(im_masked), vmin=0, vmax=1)
         plt.plot(train_points[:,1]*w, train_points[:,0]*h, 'ro', fillstyle='none')
-        plt.show()
+        fig.show()
