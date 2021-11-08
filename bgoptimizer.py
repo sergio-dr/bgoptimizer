@@ -150,7 +150,7 @@ def bg_loss_alpha(y_true, y_pred, model, alpha): # beta=0.1):
     abs_r = tf.math.abs(r)
 
     # Error loss
-    error = tf.math.reduce_mean(abs_r, axis=-1) 
+    error = tf.math.reduce_mean(abs_r, axis=-1) #+ tf.math.reduce_max(abs_r, axis=(1,2,3))
 
     # "Overshoot" penalty: if the estimated background is higher than the actual pixel value
     overshoot = tf.math.reduce_mean(abs_r - r, axis=-1)
@@ -313,7 +313,7 @@ np.nan_to_num(im, copy=False)
 plot_image_hist(im, "Delinearized & downscaled")
 
 # Preview mask
-plot_image_hist(Spline._apply_mask(im, config['threshold']), "Mask")
+plot_image_hist(Spline._generate_mask(im, config['threshold']), "Mask")
 
 
 # %%
@@ -337,7 +337,9 @@ plot_image_hist(bg_hat, "Background model")
 
 # %%
 # Visualize final train points over the (masked) image
-plot_train_points(model, im)
+#plot_train_points(model, im)
+spline_layer = model.layers[1]
+spline_layer.plot_train_points()
 
 
 # %%
@@ -348,7 +350,6 @@ plot_image_hist(im-bg_hat+im_median, "Bg subtracted (downsized, delinearized)")
 print("\n\n__/ Full-size background model & subtracted image \__________")
 
 # Generate the final background model by interpolating the trained spline to the original image size
-spline_layer = model.layers[1]
 t_start = time.perf_counter()
 bg_fullres = spline_layer.interpolate(im_orig.shape, chunks=config['downscaling_factor']**2)
 t_end = time.perf_counter()
@@ -393,22 +394,24 @@ XISF.write(bg_filepath, bg_fullres_linear)
 
 # %%
 # Experiment: variance 
-#experiment = []
-#for _ in range(0, 15):
-#    y_pred, model, history = fit_spline(im_orig, config)
+# experiment = []
+# for _ in range(30):
+#    y_pred, model, history = fit_spline(im, config)
 #    bg = y_pred[0,...]
-#    final = im_orig - bg#
-#
+#    final = im - bg + np.median(im)
+
 #    data = {
 #        'loss': min(history.history['loss']),
 #        'epochs': len(history.history['loss']),
-#        'min': final.min()
+#        'min': final.min(),
+#        'median': np.median(final),
+#        'max': final.max()
 #    }
-#    experiment.append(data)#
-#
-#df = pd.DataFrame(experiment)
-#df[['loss']].plot()
-#df.to_csv("%s_B%d_var.csv" % (filename, config['B']))
+#    experiment.append(data)
+
+# df = pd.DataFrame(experiment)
+# df[['loss']].plot()
+# df.to_csv("%s_B%d_var.csv" % (in_filename, config['B']))
 
 
 # %%
