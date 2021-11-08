@@ -1,51 +1,39 @@
 # %%
-import platform
-import os
-import time
+import argparse
+import os 
 from xisf import XISF
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-import tensorflow_addons as tfa
-from spline import Spline
 
-# For preprocessing
-import skimage
-from skimage.measure import block_reduce
+from bgmodel import BgModel
+from spline import Spline
+from imageprocessor import ImageProcessor
 
 # For visualization only
 import matplotlib.pyplot as plt
-from skimage import io
 
 # For experiments only
 import pandas as pd 
 
-# %%
-print("\n\n__/ Environment \__________")
-
-print("python:", platform.python_version())
-print("tensorflow:", tf.__version__)
-print("tensorflow_addons:", tfa.__version__)
-print("keras:", keras.__version__)
-print("numpy:", np.__version__)
-print("skimage:", skimage.__version__)
+np.set_printoptions(precision=4)
 
 
-# %%
+bg_model_fits_comment = "Background-subtracted with github.com/sergio-dr/bg-model"
 
-# __/ Script parameters \__________
-# TODO: command line args
-base_dir = "S:\\src\\bg-model"
-in_dir = "in\\pleyades"
-in_filename = "masterLight_BINNING_1_FILTER_NoFilter_EXPTIME_120_3_integration_R.xisf" 
-in_filepath = os.path.join(base_dir, in_dir, in_filename)
-out_dir = "out\\pleyades"
-out_filepath = os.path.join(base_dir, out_dir, in_filename)
-bg_filepath = os.path.join(base_dir, out_dir, "bg_"+in_filename)
 
-config = {
-    'downscaling_factor': 8, 'downscaling_func': 'median',
-    'delinearization_quantile': 0.95,
+help_desc = """
+Generates a spline based background model (by gradient descent optimization) for the input (linear) image. 
+Both the background-subtracted image and background model are written to the specified output directory 
+(appending '_bgSubtracted' and 'bgModel' suffixes to the original filename). A mask can be specified by
+giving a (min, max) threshold range (the min value can be helpful to mask out missing values after 
+registration, for example; the max value helps to ignore very bright regions when fitting the spline). 
+"""
+
+config_defaults = {
+    'out_dirpath': '.',
+    'downscaling-factor': 8, 'downscaling-func': 'median',
+    'delinearization-quantile': 0.95,
     'N': 32,
     'O': 2,
     'threshold': (0.001, 0.95),
@@ -56,381 +44,133 @@ config = {
     'epochs': 1000,
 }
 
+parser = argparse.ArgumentParser(description=help_desc, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser.add_argument("input_file", 
+                    help="Input filename. Must be in XISF format, in linear state")
+parser.add_argument("output_path", default=config_defaults['out_dirpath'],
+                    help="Path for the output files")
+parser.add_argument("-dx", "--downscaling-factor", type=int, default=config_defaults['downscaling-factor'], 
+                    help="Image downscaling factor for spline fitting")
+parser.add_argument("-df", "--downscaling-func", default=config_defaults['downscaling-func'], 
+                    help="Image downscaling function ('median', 'mean') for spline fitting")
+parser.add_argument("-dq", "--delinearization-quantile", type=float, default=config_defaults['delinearization-quantile'], 
+                    help="Quantile mapped to 1.0 in image delinearization")                  
+parser.add_argument("-N", default=config_defaults['N'], type=int, 
+                    help="Number of control points of the spline")
+parser.add_argument("-O", default=config_defaults['O'], type=int, 
+                    help="Order of the spline (2=thin-plate; 3=bicubic)")
+parser.add_argument("-tm", "--threshold-min", type=float, default=config_defaults['threshold'][0], 
+                    help="A mask can be defined by giving a (min, max) range")
+parser.add_argument("-tM", "--threshold-max", type=float, default=config_defaults['threshold'][1], 
+                    help="A mask can be defined by giving a (min, max) range") 
+parser.add_argument("-i", "--initializer", default=config_defaults['initializer'], 
+                    help="The spline fitting could be initialized with 'random' train points, or arranging then in a 'grid'")
+parser.add_argument("-a", "--alpha", type=float, default=config_defaults['alpha'], 
+                    help="[Advanced] Factor that multiplies the 'negative background' and 'overshoot' penalties in the loss function")
+parser.add_argument("-B", type=int, default=config_defaults['B'], 
+                    help="[Advanced] Batch size for the optimization process")
+parser.add_argument("-lr", type=float, default=config_defaults['lr'], 
+                    help="[Advanced] Learning rate for the optimization process")
+parser.add_argument("-e", "--epochs", type=int, default=config_defaults['epochs'], 
+                    help="[Advanced] Maximum number of epochs for the optimization process")
+
+args = parser.parse_args()
+config = vars(args)
+
 # %%
+config['threshold'] = (config.pop('threshold_min'), config.pop('threshold_max'))
 
-# __/ Preprocessing \__________
+in_filepath = os.path.abspath(args.input_file)
+out_dirpath = os.path.abspath(args.output_path)
 
-# min, med, max
-def statistics(im, title=""):
-    im_min, im_med, im_max = np.nanmin(im), np.nanmedian(im), np.nanmax(im)
-    print(f"[{title.ljust(12)}] Min / Median / Max = {im_min:.4f} / {im_med:.4f} / {im_max:.4f}", end='')
-    print("  CLIPPING!" if im_min < 0 or im_max > 1 else "")
-    return im_min, im_med, im_max
+in_name, ext = os.path.splitext( os.path.basename(in_filepath) )
+out_filename = in_name + "_bgSubtracted" + ext
+out_filepath = os.path.join(out_dirpath, out_filename)
+bg_filename = in_name + "_bgModel" + ext
+bg_filepath = os.path.join(out_dirpath, bg_filename)
 
-
-def plot_image_hist(im, title=""):
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(16,14), gridspec_kw={'height_ratios': [4, 1]})
-    _ = ax0.imshow(im[...,0], cmap='gray', vmin=0, vmax=1)
-    _ = ax1.hist(im.ravel(), bins=100)
-    fig.suptitle(title, fontsize=24)
-    fig.tight_layout()
-
-
-def downscale(data):
-    downscaling_func = {
-        'median': np.nanmedian,
-        'mean': np.nanmean
-    }[config['downscaling_func']]
-
-    block_sz = (config['downscaling_factor'], config['downscaling_factor'], 1)
-    return block_reduce(data, block_size=block_sz, func=downscaling_func)
+print("\n\n__/ Arguments \__________")
+arg_print_format = "%-24s: %s"
+print(arg_print_format % ("Input file", in_filepath))
+print(arg_print_format % ("Output path", out_dirpath))
+for key, value in config.items():
+  print(arg_print_format % (key, value))
+print("\n")
 
 
-# https://pixinsight.com/forum/index.php?threads/auto-histogram-settings-to-replicate-auto-stf.8205/#post-55143
-# donde (sea m=bg_val):
-#   mtf(0, m, r) = 0
-#   mtf(m, m, r) = bg_target_val
-#   mtf(1, m, r) = 1
-def mtf(x, bg_val, bg_target_val=0.5):
-    m, r = bg_val, 1/bg_target_val
-    return ( (1-m)*x ) / ( (1-r*m)*x + (r-1)*m ) 
+# __/ Environment \__________
 
+import platform
+import tensorflow_addons as tfa
+import skimage
 
-def imtf(y, bg_val, bg_target_val=0.5):
-    m, r = bg_val, 1/bg_target_val
-    return mtf(y, 1-m, (r-1)/r)
-
-
-# Mirroring np.nan_to_num
-def num_to_nan(data, num=0.0):
-    data[data == num] = np.nan
-
-
-def delinearize(data, bg_target_val=0.25):
-    # Subtract pedestal
-    pedestal = np.nanmin(data)
-    data -= pedestal
-    
-    # Scale to [0,1] range, mapping the given quantile (instead of the max) to 1.0.
-    # This blows out the highlights, but we are interested in the background!
-    scale = np.nanquantile(data, q=config['delinearization_quantile']) 
-    data /= scale
-    data = data.clip(0.0, 1.0)
-
-    # Estimate background value
-    bg_val = np.nanmedian(data)
-
-    return mtf(data, bg_val, bg_target_val), pedestal, scale, bg_val
-
-
-def linearize(data, pedestal, scale, bg_val, bg_target_val=0.25):
-    data = imtf(data, bg_val, bg_target_val)
-    data *= scale
-    data += pedestal
-    return data
+print("\n\n__/ Environment \__________")
+print("python:", platform.python_version())
+print("tensorflow:", tf.__version__)
+print("tensorflow_addons:", tfa.__version__)
+print("keras:", keras.__version__)
+print("numpy:", np.__version__)
+print("skimage:", skimage.__version__)
+print("\n")
 
 
 
 # %%
 
-# __/ Custom loss \__________
-def bg_loss_alpha(y_true, y_pred, model, alpha): # beta=0.1):
-    # In this model, y_true is im, y_pred is the generated background model (spline)
-    
-    # Get mask and bg_val from the spline layer
-    spline_layer = model.layers[1]
-    mask = spline_layer.mask
-    bg_val = spline_layer.bg_val
-    
-    # Apply mask (like in Spline.build())
-    masked_y_true = mask*y_true + (1-mask)*bg_val
-    
-    # Residuals
-    r = masked_y_true - y_pred
-    abs_r = tf.math.abs(r)
+# In the following: fr=full resolution, lin/nl = linear/non-linear
 
-    # Error loss
-    error = tf.math.reduce_mean(abs_r, axis=-1) #+ tf.math.reduce_max(abs_r, axis=(1,2,3))
-
-    # "Overshoot" penalty: if the estimated background is higher than the actual pixel value
-    overshoot = tf.math.reduce_mean(abs_r - r, axis=-1)
-
-    # Negative background penalty: if the estimated background is negative
-    negative_bg = tf.math.reduce_mean(tf.math.abs(y_pred) - y_pred) 
-
-    # Spline complexity penalty
-    #complexity = tf.math.reduce_mean(tf.math.square(spline_layer.ww)) + tf.math.reduce_mean(tf.math.square(spline_layer.vw))
-
-    return error + alpha*(overshoot + negative_bg) #+ beta*complexity
-    #return tf.math.log(0.001 + error + alpha*(overshoot + negative_bg))
-
-
-# __/ Callbacks \__________
-earlystop = tf.keras.callbacks.EarlyStopping(
-    monitor='loss', 
-    min_delta=0.00005, 
-    patience=100,
-    restore_best_weights=True,
-    verbose=True
-)
-
-reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-    monitor='loss', 
-    factor=0.5,
-    patience=50, 
-    min_lr=0.0001,
-    verbose=True
-)
-
-def lr_sched(epoch, lr):
-    if epoch == 25:
-        return 0.1 * lr
-    else:
-        return lr
-
-lrsched = tf.keras.callbacks.LearningRateScheduler(lr_sched, verbose=True)
-
-
-class PredictionCallback(tf.keras.callbacks.Callback): 
-    def __init__(self):
-        os.makedirs(out_dir, exist_ok=True)
-
-    def on_epoch_end(self, epoch, logs={}):
-        X = np.zeros(config['B'])
-        y_true = self.model.layers[1].im.numpy()
-        y_pred = self.model.predict_on_batch(X).numpy()[0,...]
-        final = y_true - y_pred
-        final -= final.min()
-        final /= final.max()
-        im = (255 * final).astype(np.uint8)
-        im_fname = os.path.join(out_dir, f"Epoch_{epoch:03d}.png")
-        io.imsave(im_fname, im)    
-
-prediction = PredictionCallback()
-
-callbacks = [earlystop, reduce_lr] #, prediction] #, lrsched]
-
-
-# __/ Model fit and predict (spline fitting) \__________
-def fit_spline(im, config):
-    # Mask definition
-    threshold = config['threshold']
-
-    # Spline complexity params
-    N, O = config['N'], config['O']
-    # Spline control points initialization
-    initializer = config['initializer']
-    # Spline regularization parameter for loss function
-    alpha = config['alpha']
-
-    # Training params
-    B, lr, epochs = config['B'], config['lr'], config['epochs']
-
-    # y_true is im
-    im_orig = np.expand_dims(im, axis=0)
-    y_true = im_orig.repeat(B, axis=0)
-
-    # Dummy input
-    X = np.zeros(B) 
-
-    # Model
-    x = keras.layers.Input(shape=(), name='input_layer', batch_size=B)
-    y = Spline(im, mask=threshold, n_control_points=N, order=O, initializer=initializer)(x)
-    model = keras.Model(inputs=x, outputs=y, name="bgmodel")
-    model.summary()
-
-    # Initial train_points positions
-    #plot_train_points(model, im)
-    #plt.show()
-
-    # Model compilation with custom loss
-    optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
-    bg_loss = lambda y_true, y_pred: bg_loss_alpha(y_true, y_pred, model, alpha) 
-    model.compile(optimizer, loss=bg_loss)
-
-    print("Fitting spline...")
-    t_start = time.perf_counter()
-    # Model fit
-    history = model.fit(
-        x=X, y=y_true, 
-        epochs=epochs, 
-        callbacks=callbacks,
-        verbose=0
-    )
-    t_end = time.perf_counter()
-    print(f"Done in {t_end-t_start:.2f} seconds")
-
-    # Optimized background model 
-    y_pred = model.predict(X)
-
-    return y_pred[0,...], model, history
-
-
-# __/ Draw spline train points \__________
-def plot_train_points(model, im):
-    h, w, _ = im.shape
-    spline_layer = model.layers[1]
-    train_points = spline_layer.train_points.numpy()[0]
-    if spline_layer.mask is not None:
-        x = im * spline_layer.mask
-    else:
-        x = im
-
-    fig, ax = plt.subplots(figsize=(16,8))
-    ax.imshow(x[...,0], cmap='gray')
-    ax.plot(train_points[:,1]*w, train_points[:,0]*h, 'go', fillstyle='none')
-
-
-# %%
-
-# __/ Main script \__________
-
-print("\n\n__/ Preprocessing \__________")
-
-# Open original image
+# Read the input image
 xisf = XISF(in_filepath)
-im_orig = xisf.read_image(0)
-_, im_orig_median, _ = statistics(im_orig, "Original")
-
-# Preprocessing uses a copy
-im = im_orig.copy()
-
-# Ignore zero values (real data has some pedestal) by converting to NaN
-num_to_nan(im)
-
-# Delinearize to stretch the background
-im, pedestal, scale, bg_val = delinearize(im)
-_, im_median, _ = statistics(im, "Delinearized")
-
-# Downscale
-im = downscale(im)
-_ = statistics(im, "Downscaled")
-
-# Replace NaNs
-np.nan_to_num(im, copy=False)
-
-# Visualize preprocessed image
-plot_image_hist(im, "Delinearized & downscaled")
-
-# Preview mask
-plot_image_hist(Spline._generate_mask(im, config['threshold']), "Mask")
+im_fr_lin = xisf.read_image(0)
 
 
-# %%
+# Preprocess the image (delinearize and downscale)
+print("\n\n__/ Preprocessing \__________")
+improc = ImageProcessor(config)
+im_ds_nl = improc.fit_transform(im_fr_lin)
+improc.plot_image_hist(im_ds_nl * Spline._generate_mask(im_ds_nl, config['threshold']), "Delinearized, downscaled, masked")
+
+
+# Fit the background model on the delinearized, downsized version of the image
 print("\n\n__/ Background modeling \__________")
+bgmodel = BgModel(config)
+bg_hat_ds_nl = bgmodel.fit_transform(im_ds_nl)
 
-# Fit spline
-bg_hat, model, history = fit_spline(im, config)
+#   Training results
+bgmodel.training_report()
+bgmodel.spline_layer.plot_train_points()
 
-print(f"N, B, epochs, loss: {config['N']}, {config['B']}, {len(history.history['loss'])}, {min(history.history['loss']):.5f}")
+#   Show fitted background model
+improc.plot_image_hist(bg_hat_ds_nl, "Fitted background model")
 
-plt.figure(figsize=(10, 3))
-plt.plot(history.history['loss'], label='Loss')
-plt.title('Loss')
-
-
-# %%
-# Visualize fitted spline (background model)
-_ = statistics(bg_hat, "Bg model")
-plot_image_hist(bg_hat, "Background model")
+#   Preview subtracted result
+im_hat_ds_nl = im_ds_nl-bg_hat_ds_nl+improc.im_fr_nl_median
+improc.plot_image_hist(im_hat_ds_nl, "Background-subtracted (downsized, delinearized)")
 
 
-# %%
-# Visualize final train points over the (masked) image
-#plot_train_points(model, im)
-spline_layer = model.layers[1]
-spline_layer.plot_train_points()
-
-
-# %%
-plot_image_hist(im-bg_hat+im_median, "Bg subtracted (downsized, delinearized)")
-
-
-# %%
+# Generate background model at full res, linearize it and subtract to the original image
 print("\n\n__/ Full-size background model & subtracted image \__________")
+bg_hat_fr_nl = bgmodel.interpolate_to(im_fr_lin.shape)
+bg_hat_fr_lin = improc.inverse_transform(bg_hat_fr_nl)
+im_hat_fr_lin = improc.subtract_safe(im_fr_lin, bg_hat_fr_lin)
 
-# Generate the final background model by interpolating the trained spline to the original image size
-t_start = time.perf_counter()
-bg_fullres = spline_layer.interpolate(im_orig.shape, chunks=config['downscaling_factor']**2)
-t_end = time.perf_counter()
-print(f"Elapsed {t_end-t_start:.2f} seconds")
-
-_ = statistics(bg_fullres, "Bg (full size)")
-plot_image_hist(bg_fullres, "Background model (full size)")
-
-
-# %%
-# Linearize the background model...
-bg_fullres_linear = linearize(bg_fullres, pedestal, scale, bg_val)
-_ = statistics(bg_fullres_linear, "Bg (linear)")
-
-# ... and subtract it from the original image
-im_final = im_orig - bg_fullres_linear
-im_final_min, _, _ = statistics(im_final, "Subtracted")
-
-# Visualize out of range (negative, really) values
+#   Preview background-subtracted image
 plt.figure(figsize=(16,10))
-plt.imshow(-im_final.clip(-1,0)[...,0], cmap='gray')
-plt.title("Pixels with negative value after subtraction")
-
-# Apply pedestal so the final image has the same median value as the original
-im_final -= im_final_min
-im_final += im_orig_median
-if im_final.max() > 1.0:
-    im_final /= im_final.max()
-
-_ = statistics(im_final, "Final")
+plt.imshow(improc._delinearize(im_hat_fr_lin.copy(), 0.25)[...,0], cmap='gray')
 
 # %%
-plt.figure(figsize=(16,10))
-plt.imshow(delinearize(im_final.copy(), 0.25)[0][...,0], cmap='gray')
+# Write background-subtracted image and the background model to file
+print("\n\n__/ Saving output files \__________")
+os.makedirs(out_dirpath, exist_ok=True)
 
-# %%
-os.makedirs(os.path.dirname(out_filepath), exist_ok=True)
+metadata = xisf.get_images_metadata()[0]
+metadata['FITSKeywords'].setdefault('COMMENT', []).append({'value':'', 'comment': bg_model_fits_comment})
 
-# Write final image and background model to file
-XISF.write(out_filepath, im_final, xisf.get_images_metadata()[0], xisf.get_file_metadata())
-XISF.write(bg_filepath, bg_fullres_linear)
+print(f"Writing {out_filepath}... ")
+XISF.write(out_filepath, im_hat_fr_lin, metadata, xisf.get_file_metadata())
+print("done.")
 
-# %%
-# Experiment: variance 
-# experiment = []
-# for _ in range(30):
-#    y_pred, model, history = fit_spline(im, config)
-#    bg = y_pred[0,...]
-#    final = im - bg + np.median(im)
+print(f"Writing {bg_filepath}... ")
+XISF.write(bg_filepath, bg_hat_fr_lin)
+print("done.")
 
-#    data = {
-#        'loss': min(history.history['loss']),
-#        'epochs': len(history.history['loss']),
-#        'min': final.min(),
-#        'median': np.median(final),
-#        'max': final.max()
-#    }
-#    experiment.append(data)
-
-# df = pd.DataFrame(experiment)
-# df[['loss']].plot()
-# df.to_csv("%s_B%d_var.csv" % (in_filename, config['B']))
-
-
-# %%
-# Experiment: varying N
-#experiment = []
-#for N in [15, 25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300]:
-#    config['N'] = N
-#    y_pred, model, history = fit_spline(im_orig, config)
-#    bg = y_pred[0,...]
-#    final = im_orig - bg
-#
-#    data = {
-#        'N': N,
-#        'loss': min(history.history['loss']),
-#        'epochs': len(history.history['loss']),
-#        'min': final.min()
-#    }
-#    experiment.append(data)
-#
-#df = pd.DataFrame(experiment).set_index("N")
-#df[['loss']].plot()
-#df.to_csv("%s_N.csv" % (filename,))
