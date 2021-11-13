@@ -7,9 +7,9 @@ import matplotlib.pyplot as plt
 class ImageProcessor:
     
     config_defaults = {
-        'downscaling-factor': 8, 
-        'downscaling-func': 'median',
-        'delinearization-quantile': 0.95,
+        'downscaling_factor': 8, 
+        'downscaling_func': 'median',
+        'delinearization_quantile': 0.95,
     }    
 
 
@@ -74,9 +74,9 @@ class ImageProcessor:
         downscaling_func = {
             'median': np.nanmedian,
             'mean': np.nanmean
-        }[self.config['downscaling-func']]
+        }[self.config['downscaling_func']]
 
-        block_sz = (self.config['downscaling-factor'], self.config['downscaling-factor'], 1)
+        block_sz = (self.config['downscaling_factor'], self.config['downscaling_factor'], 1)
         return block_reduce(data, block_size=block_sz, func=downscaling_func)
 
 
@@ -110,7 +110,7 @@ class ImageProcessor:
         
         # Scale to [0,1] range, mapping the given quantile (instead of the max) to 1.0.
         # This blows out the highlights, but we are interested in the background!
-        self.scale = np.nanquantile(data, q=self.config['delinearization-quantile'], axis=(0,1)) 
+        self.scale = np.nanquantile(data, q=self.config['delinearization_quantile'], axis=(0,1)) 
         data /= self.scale
         data = data.clip(0.0, 1.0)
 
@@ -137,13 +137,13 @@ class ImageProcessor:
 
     @staticmethod
     def plot_image_hist(im, title=""):
-        fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(16,14), gridspec_kw={'height_ratios': [4, 1]})
+        fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 10), gridspec_kw={'height_ratios': [4, 1]})
 
         _ = ax0.imshow(np.squeeze(im), vmin=0, vmax=1)
 
-        color = 'rgb' if im.shape[-1] == 3 else 'black'
+        color = 'rgb' if im.shape[-1] == 3 else ['black']
         for c in range(im.shape[-1]):
-            _ = ax1.hist(im[..., c].ravel(), bins=100, alpha=0.5, color=color[c])
+            _ = ax1.hist(im[..., c].ravel(), bins=100, alpha=0.25, color=color[c])
 
         fig.suptitle(title, fontsize=24)
         fig.tight_layout()

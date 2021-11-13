@@ -126,7 +126,7 @@ class Spline(keras.layers.Layer):
                 shape=(1, self.n_control_points, 2), initializer=train_points_initializer, trainable=True
             )
         elif self.initializer == 'grid':
-            n_points_per_axis = np.round(np.sqrt(self.n_control_points))
+            n_points_per_axis = np.rint(np.sqrt(self.n_control_points)).astype(np.int32)
             gy, gx = np.linspace(0, h-1, n_points_per_axis)/h, np.linspace(0, w-1, n_points_per_axis)/w
             train_points = np.array(np.meshgrid(gy, gx)).T.astype(np.float32)
             #   TODO: add random jitter? training most probably jitter them anyway

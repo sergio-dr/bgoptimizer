@@ -13,7 +13,7 @@ class BgModel:
     config_defaults = {
         'N': 32,
         'O': 2,
-        'threshold': (0.001, 0.95),
+        'threshold': (0.001, 1.0),
         'initializer': 'random', 
         'alpha': 5,    
         'B': 1,
@@ -29,22 +29,26 @@ class BgModel:
         self.history = {}
 
 
-    def bg_loss_alpha(self, y_true, y_pred): # beta=0.1):
+    def bg_loss_alpha(self, y_true, y_pred):
         # In this model, y_true is im, y_pred is the generated background model (spline)
         
         # Get mask and bg_val from the spline layer
         mask = self.spline_layer.mask
-        bg_val = self.spline_layer.bg_val
+        #bg_val = self.spline_layer.bg_val # TODO eliminar
         
-        # Apply mask (like in Spline.build())
-        masked_y_true = mask*y_true + (1-mask)*bg_val
+        # Apply mask
+        #masked_y_true = mask*y_true# + (1-mask)*bg_val
         
-        # Residuals
-        r = masked_y_true - y_pred
+        # Masked residuals (so masked values will have no weight to the final loss)
+        r = mask * ( y_true - y_pred )   
         abs_r = tf.math.abs(r)
 
-        # Error loss (TODO: may be not optimal for 3-channel images)
-        error = tf.math.reduce_mean(abs_r, axis=-1)  #+ tf.math.reduce_max(abs_r, axis=(1,2,3))
+        # Error loss 
+        error = tf.math.reduce_mean(abs_r, axis=-1) 
+
+        # In color images, try to reduce the variance over the channels of each pixel, to balance the background
+        # TODO: reduce_std for some reason produce NaN on the loss
+        color_balance = tf.math.reduce_variance(r, axis=-1)
 
         # "Overshoot" penalty: if the estimated background is higher than the actual pixel value
         overshoot = tf.math.reduce_mean(abs_r - r, axis=-1)
@@ -56,8 +60,8 @@ class BgModel:
         #complexity = tf.math.reduce_mean(tf.math.square(self.spline_layer.ww)) + tf.math.reduce_mean(tf.math.square(self.spline_layer.vw))
 
         alpha = self.config['alpha']
-        return error + alpha*(overshoot + negative_bg) #+ beta*complexity
-        #return tf.math.log(0.001 + error + alpha*(overshoot + negative_bg))
+        #return error + color_balance + alpha*(overshoot + negative_bg) #+ beta*complexity
+        return tf.math.log(0.001 + error + color_balance + alpha*(overshoot + negative_bg))
 
 
     def _build_callbacks(self):
@@ -116,8 +120,6 @@ class BgModel:
         N, O = self.config['N'], self.config['O']
         # Spline control points initialization
         initializer = self.config['initializer']
-        # Spline regularization parameter for loss function
-        alpha = self.config['alpha']
 
         # Training params
         B, lr, epochs = self.config['B'], self.config['lr'], self.config['epochs']
@@ -149,7 +151,7 @@ class BgModel:
             x=X, y=y_true, 
             epochs=epochs, 
             callbacks=self._build_callbacks(),
-            verbose=0
+            #verbose=0
         )
         t_end = time.perf_counter()
         print(f"Done in {t_end-t_start:.2f} seconds")
