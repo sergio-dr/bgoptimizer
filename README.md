@@ -7,12 +7,15 @@ More info about this approach in the [blog page](https://expandingastro.blogspot
 **Please cite this repo** if you use this code or some derivative to produce images to be published: "*Background modeling based on [bgoptimizer](https://github.com/sergio-dr/bgoptimizer) tool by Sergio Díaz*".
 
 Example input:
+
 ![Input](./imgs/M45_in.jpg)
 
 Example output:
+
 ![Output](./imgs/M45_out.jpg)
 
 Animation of the optimization process:
+
 ![Animation](./imgs/bgoptimizer_M45.gif) 
 
 # Usage
