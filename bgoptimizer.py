@@ -52,7 +52,7 @@ config_defaults = {
 parser = argparse.ArgumentParser(description=help_desc, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("input_file", 
                     help="Input filename. Must be in XISF format, in linear state")
-parser.add_argument("output_path", default=config_defaults['out_dirpath'],
+parser.add_argument("output_path", default=config_defaults['out_dirpath'], nargs='?',
                     help="Path for the output files")
 parser.add_argument("-dx", "--downscaling-factor", type=int, default=config_defaults['downscaling_factor'], 
                     help="Image downscaling factor for spline fitting")
@@ -71,16 +71,15 @@ parser.add_argument("-tm", "--threshold-min", type=float, default=config_default
 parser.add_argument("-tM", "--threshold-max", type=float, default=config_defaults['threshold_max'], 
                     help="A mask can be defined by giving a (min, max) range") 
 parser.add_argument("-i", "--initializer", default=config_defaults['initializer'], 
-                    help="The spline fitting could be initialized with 'random' train points, or arranging then in a 'grid'")
+                    help="The spline fitting could be initialized with 'random' train points, or arranging them in a 'grid'")
+parser.add_argument("-e", "--epochs", type=int, default=config_defaults['epochs'], 
+                    help="Maximum number of epochs (iterations) for the optimization process")
 parser.add_argument("-a", "--alpha", type=float, default=config_defaults['alpha'], 
                     help="[Advanced] Factor that multiplies the 'negative background' and 'overshoot' penalties in the loss function")
 parser.add_argument("-B", type=int, default=config_defaults['B'], 
                     help="[Advanced] Batch size for the optimization process")
 parser.add_argument("-lr", type=float, default=config_defaults['lr'], 
                     help="[Advanced] Learning rate for the optimization process")
-parser.add_argument("-e", "--epochs", type=int, default=config_defaults['epochs'], 
-                    help="[Advanced] Maximum number of epochs for the optimization process")
-
 args = parser.parse_args(DEBUG_CMDLINE)
 config = vars(args)
 
@@ -138,13 +137,15 @@ improc.plot_image_hist(im_ds_nl * Spline._generate_mask(im_ds_nl, config['thresh
 
 
 # %%
+
+# Fit the background model on the delinearized, downsized version of the image
+print("\n\n__/ Background modeling \__________")
+
 if config['preview']:
   print("Skipping spline fit, --preview requested.")
   plt.show()
   exit(0)
 
-# Fit the background model on the delinearized, downsized version of the image
-print("\n\n__/ Background modeling \__________")
 bgmodel = BgModel(config)
 bg_hat_ds_nl = bgmodel.fit_transform(im_ds_nl)
 
@@ -168,6 +169,7 @@ im_hat_fr_lin = improc.subtract_safe(im_fr_lin, bg_hat_fr_lin)
 #   Preview background-subtracted image
 fig = plt.figure(figsize=(14,10))
 plt.imshow(improc._delinearize(im_hat_fr_lin.copy(), 0.25))
+plt.title('Bg-subtracted image preview')
 fig.show()
 
 # %%
