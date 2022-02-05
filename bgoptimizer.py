@@ -1,4 +1,22 @@
 # %%
+"""
+bgoptimizer -- Astrophotography background modeling/subtraction via spline gradient descent optimization
+
+Copyright (C) 2021-2022 Sergio Díaz, sergiodiaz.eu
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, version 3 of the License.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+more details.
+
+You should have received a copy of the GNU General Public License along with
+this program.  If not, see <http://www.gnu.org/licenses/>.
+"""
+
 import argparse
 import os 
 from xisf import XISF
@@ -65,7 +83,7 @@ parser.add_argument("-df", "--downscaling-func", default=config_defaults['downsc
 parser.add_argument("-dq", "--delinearization-quantile", type=float, default=config_defaults['delinearization_quantile'], 
                     help="Quantile mapped to 1.0 in image delinearization")                  
 parser.add_argument("-p", "--preview", action='store_true',
-                    help="Don't fit spline, just preview generated mask")                               
+                    help="Don't fit the spline, just preview delinearization and masking") 
 parser.add_argument("-N", default=config_defaults['N'], type=int, 
                     help="Number of control points of the spline")
 parser.add_argument("-O", default=config_defaults['O'], type=int, 
