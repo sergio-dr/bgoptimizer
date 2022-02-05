@@ -19,7 +19,8 @@ class BgModel:
         'B': 1,
         'lr': 0.001,
         'epochs': 1000,
-        'out_dirpath': '.'
+        'out_dirpath': '.',
+        'concise_report_epochs': 100
     }
 
     def __init__(self, config):
@@ -89,13 +90,26 @@ class BgModel:
 
         lrsched = tf.keras.callbacks.LearningRateScheduler(lr_sched, verbose=True)
 
+        class ConciseTrainReport(tf.keras.callbacks.Callback): 
+            def __init__(self, config):
+                self.epochs = config['epochs']
+                self.concise = config['concise_report_epochs']
+
+            def on_epoch_end(self, epoch, logs=None):
+                if epoch > 0 and epoch % self.concise == 0:
+                    print(f"Epoch {epoch:05d} - loss: {logs['loss']:.6f}")
+
+            def on_train_end(self, logs=None):
+                print(f"Epoch {self.epochs:05d} - loss: {logs['loss']:.6f}")
+            
+        concise = ConciseTrainReport(self.config)
 
         class PredictionCallback(tf.keras.callbacks.Callback): 
             def __init__(self, config):
                 self.config = config
                 os.makedirs(self.config['out_dirpath'], exist_ok=True)
 
-            def on_epoch_end(self, epoch, logs={}):
+            def on_epoch_end(self, epoch, logs=None):
                 X = np.zeros(self.config['B'])
                 y_true = self.model.layers[1].im.numpy()
                 y_pred = self.model.predict_on_batch(X).numpy()[0,...]
@@ -108,13 +122,13 @@ class BgModel:
 
         prediction = PredictionCallback(self.config)
 
-        return [earlystop, reduce_lr] #, prediction] #, lrsched]
+        return [concise, earlystop, reduce_lr] #, prediction] #, lrsched]
 
 
     # __/ Model fit and predict (spline fitting) \__________
     def fit_transform(self, im):
         # Mask definition
-        threshold = self.config['threshold']
+        mask = self.config['npmask'] if self.config['mask'] else self.config['threshold']
 
         # Spline complexity params
         N, O = self.config['N'], self.config['O']
@@ -132,7 +146,7 @@ class BgModel:
 
         # Model
         x = keras.layers.Input(shape=(), name='input_layer', batch_size=B)
-        y = Spline(im, mask=threshold, n_control_points=N, order=O, initializer=initializer)(x)
+        y = Spline(im, mask=mask, n_control_points=N, order=O, initializer=initializer)(x)
         self.model = keras.Model(inputs=x, outputs=y, name="bgmodel")
         self.spline_layer = self.model.layers[1]
         #self.model.summary()
@@ -151,7 +165,7 @@ class BgModel:
             x=X, y=y_true, 
             epochs=epochs, 
             callbacks=self._build_callbacks(),
-            #verbose=0
+            verbose=0
         )
         t_end = time.perf_counter()
         print(f"Done in {t_end-t_start:.2f} seconds")
@@ -163,8 +177,8 @@ class BgModel:
 
 
     def training_report(self):
-        cfg, h = self.config, self.history
-        print(f"N, B, epochs, loss: {cfg['N']}, {cfg['B']}, {len(h.history['loss'])}, {min(h.history['loss']):.5f}")
+        h = self.history
+        print(f"Min loss: {min(h.history['loss']):.6f}")
 
         fig = plt.figure(figsize=(10, 3))
         plt.plot(h.history['loss'], label='Loss')

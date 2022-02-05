@@ -3,6 +3,8 @@ import argparse
 import os 
 from xisf import XISF
 import numpy as np
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' # Only show errors
 import tensorflow as tf
 from tensorflow import keras
 
@@ -18,7 +20,6 @@ import pandas as pd
 
 np.set_printoptions(precision=4)
 
-
 DEBUG_CMDLINE = None
 #DEBUG_CMDLINE = "in\\orion\\O3.xisf out2 -dq 1.0 -p".split(" ") 
 
@@ -30,8 +31,10 @@ help_desc = """
 Generates a spline based background model (by gradient descent optimization) for the input (linear) image. 
 Both the background-subtracted image and background model are written to the specified output directory 
 (appending '_bgSubtracted' and 'bgModel' suffixes to the original filename). A mask can be specified by
-giving a (min, max) threshold range (the min value can be helpful to mask out missing values after 
-registration, for example; the max value helps to ignore very bright regions when fitting the spline). 
+providing a grayscale mask image, or by providing a (min, max) threshold range (outside this range, 
+pixels are masked). Fully masked pixels are ignored during optimization, so masks are helpful, e.g., for 
+ignorig missing values after registration, or very bright regions, when fitting the spline. Only XISF files
+are supported. 
 """
 
 config_defaults = {
@@ -42,6 +45,7 @@ config_defaults = {
     'O': 2,
     'threshold_min': 0.001, 
     'threshold_max': 1.0,
+    'mask': None,
     'initializer': 'random', 
     'alpha': 5,    
     'B': 1,
@@ -53,7 +57,7 @@ parser = argparse.ArgumentParser(description=help_desc, formatter_class=argparse
 parser.add_argument("input_file", 
                     help="Input filename. Must be in XISF format, in linear state")
 parser.add_argument("output_path", default=config_defaults['out_dirpath'], nargs='?',
-                    help="Path for the output files")
+                    help="Path for the output files (by default, the current directory)")
 parser.add_argument("-dx", "--downscaling-factor", type=int, default=config_defaults['downscaling_factor'], 
                     help="Image downscaling factor for spline fitting")
 parser.add_argument("-df", "--downscaling-func", default=config_defaults['downscaling_func'], 
@@ -70,6 +74,8 @@ parser.add_argument("-tm", "--threshold-min", type=float, default=config_default
                     help="A mask can be defined by giving a (min, max) range")
 parser.add_argument("-tM", "--threshold-max", type=float, default=config_defaults['threshold_max'], 
                     help="A mask can be defined by giving a (min, max) range") 
+parser.add_argument("-m", "--mask", type=str, default=config_defaults['mask'], 
+                    help="Path to a mask file (grayscale)")
 parser.add_argument("-i", "--initializer", default=config_defaults['initializer'], 
                     help="The spline fitting could be initialized with 'random' train points, or arranging them in a 'grid'")
 parser.add_argument("-e", "--epochs", type=int, default=config_defaults['epochs'], 
@@ -100,7 +106,6 @@ print("\n\n__/ Arguments \__________")
 arg_print_format = "%-24s: %s"
 for key, value in config.items():
   print(arg_print_format % (key, value))
-print("\n")
 
 
 # __/ Environment \__________
@@ -116,24 +121,32 @@ print("tensorflow_addons:", tfa.__version__)
 print("keras:", keras.__version__)
 print("numpy:", np.__version__)
 print("skimage:", skimage.__version__)
-print("\n")
 
 
 
 # %%
 
+print("\n\n__/ Preprocessing \__________")
 # In the following: fr=full resolution, lin/nl = linear/non-linear
 
 # Read the input image
 xisf = XISF(in_filepath)
 im_fr_lin = xisf.read_image(0)
 
-
 # Preprocess the image (delinearize and downscale)
-print("\n\n__/ Preprocessing \__________")
 improc = ImageProcessor(config)
 im_ds_nl = improc.fit_transform(im_fr_lin)
-improc.plot_image_hist(im_ds_nl * Spline._generate_mask(im_ds_nl, config['threshold']), "Delinearized, downscaled, masked")
+
+# Get mask
+if config['mask']:
+  mask = improc.downscale( XISF.read(config['mask']) )
+  assert mask.shape == im_ds_nl.shape, f"Mask should have the same shape as the input image: {im_ds_nl.shape}"
+  config['npmask'] = mask
+else:
+  mask = Spline._generate_mask(im_ds_nl, config['threshold'])
+
+# Show image (masked)
+improc.plot_image_hist(im_ds_nl * mask, "Delinearized, downscaled, masked")
 
 
 # %%

@@ -20,20 +20,20 @@ class ImageProcessor:
 
 
     def fit_transform(self, im_fr_lin): # delinearize+downscale
-        _, self.im_fr_lin_median, _ = self.statistics(im_fr_lin, "Original")
-
         # Preprocessing uses a copy
         im = im_fr_lin.copy()
 
         # Ignore zero values (real data has some pedestal) by converting to NaN
         self._num_to_nan(im)
 
+        _, self.im_fr_lin_median, _ = self.statistics(im_fr_lin, "Original")
+
         # Delinearize to stretch the background
         im = self._delinearize(im)
         _, self.im_fr_nl_median, _ = self.statistics(im, "Delinearized")
 
         # Downscale
-        im = self._downscale(im)
+        im = self.downscale(im)
         _ = self.statistics(im, "Downscaled")
 
         # Replace NaNs
@@ -70,7 +70,7 @@ class ImageProcessor:
         return im_final     
 
 
-    def _downscale(self, data):
+    def downscale(self, data):
         downscaling_func = {
             'median': np.nanmedian,
             'mean': np.nanmean
@@ -115,7 +115,7 @@ class ImageProcessor:
         data = data.clip(0.0, 1.0)
 
         # Estimate background value
-        self.bg_val = np.nanmedian(data, axis=(0,1))
+        self.bg_val = np.nanmedian(data, axis=(0, 1))
 
         return self._mtf(data, self.bg_val, bg_target_val)
 
@@ -130,7 +130,7 @@ class ImageProcessor:
     @staticmethod
     def statistics(im, title=""):
         im_min, im_med, im_max = np.nanmin(im, axis=(0,1)), np.nanmedian(im, axis=(0,1)), np.nanmax(im, axis=(0,1))
-        print("[%s] Min / Median / Max = %s / %s / %s" % (title.ljust(12), im_min, im_med, im_max), end='')
+        print(f"[{title.ljust(12)}] Min / Median / Max = {float(im_min):.4f} / {float(im_med):.4f} / {float(im_max):.4f}", end='')
         print("  (!)" if (im_min < 0).any() or (im_max > 1).any() else "")
         return im_min, im_med, im_max
 
