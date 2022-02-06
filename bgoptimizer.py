@@ -33,9 +33,6 @@ from imageprocessor import ImageProcessor
 # For visualization only
 import matplotlib.pyplot as plt
 
-# For experiments only
-import pandas as pd 
-
 np.set_printoptions(precision=4)
 
 DEBUG_CMDLINE = None
@@ -198,10 +195,8 @@ bg_hat_fr_lin = improc.inverse_transform(bg_hat_fr_nl)
 im_hat_fr_lin = improc.subtract_safe(im_fr_lin, bg_hat_fr_lin)
 
 #   Preview background-subtracted image
-fig = plt.figure(figsize=(14,10))
-plt.imshow(improc._delinearize(im_hat_fr_lin.copy(), 0.25))
-plt.title('Bg-subtracted image preview')
-fig.show()
+#improc.plot_image_hist(improc._delinearize(im_hat_fr_lin.copy(), 0.25), 'Bg-subtracted image preview')
+
 
 # %%
 # Write background-subtracted image and the background model to file
