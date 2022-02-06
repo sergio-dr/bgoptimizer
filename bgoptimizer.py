@@ -39,7 +39,7 @@ DEBUG_CMDLINE = None
 #DEBUG_CMDLINE = "in\\orion\\O3.xisf out2 -dq 1.0 -p".split(" ") 
 
 
-bg_model_fits_comment = "Background-subtracted with github.com/sergio-dr/bg-model"
+bg_model_fits_comment = "Background-subtracted with github.com/sergio-dr/bgoptimizer"
 
 
 help_desc = """
