@@ -4,9 +4,15 @@ Astrophotography **background modeling** (and subtraction) via spline gradient d
 
 More info about this approach in the [blog page](https://expandingastro.blogspot.com/2022/02/background-modeling-via-spline-gradient.html). 
 
-This tools requires python 3.8+, tensorflow 2 (GPU recommended), tensorflow_addons, numpy, skimage and [xisf](https://github.com/sergio-dr/xisf) packages. 
+This tool requires python 3.8+, tensorflow 2 (GPU recommended), tensorflow_addons, numpy, skimage and [xisf](https://github.com/sergio-dr/xisf) packages. 
 
-**Please cite this repo** if you use this code or some derivative to produce images to be published: "*Background modeling based on [bgoptimizer](https://github.com/sergio-dr/bgoptimizer) tool by Sergio Díaz*".
+[**Try it in Google Colab**](https://colab.research.google.com/github/sergio-dr/bgoptimizer/blob/master/bgoptimizer_colab.ipynb)
+
+
+> **Please cite this repo** if you use this code or some derivative to produce images to be published, or if you integrate it in another software tool: 
+> 
+> "*Background modeling based on [bgoptimizer](https://github.com/sergio-dr/bgoptimizer) tool by Sergio Díaz*".
+
 
 Example input:
 
