@@ -36,7 +36,7 @@ usage: bgoptimizer.py [-h] [-dx DOWNSCALING_FACTOR] [-df DOWNSCALING_FUNC] [-dq 
 
 Generates a spline based background model (by gradient descent optimization) for the input (linear) image. Both the
 background-subtracted image and background model are written to the specified output directory (appending
-'_bgSubtracted' and 'bgModel' suffixes to the original filename). A mask can be specified by providing a grayscale
+'_bgSubtracted' and 'bgModel' suffixes to the original filename). A mask can be specified by providing a 
 mask image, or by providing a (min, max) threshold range (outside this range, pixels are masked). Fully masked pixels
 are ignored during optimization, so masks are helpful, e.g., for ignorig missing values after registration, or very
 bright regions, when fitting the spline. Only XISF files are supported.
@@ -61,7 +61,7 @@ optional arguments:
                         A mask can be defined by giving a (min, max) range (default: 0.001)
   -tM THRESHOLD_MAX, --threshold-max THRESHOLD_MAX
                         A mask can be defined by giving a (min, max) range (default: 1.0)
-  -m MASK, --mask MASK  Path to a mask file (grayscale) (default: None)
+  -m MASK, --mask MASK  Path to a mask file (default: None)
   -i INITIALIZER, --initializer INITIALIZER
                         The spline fitting could be initialized with 'random' train points, or arranging them in a
                         'grid' (default: random)

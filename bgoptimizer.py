@@ -47,7 +47,7 @@ help_desc = """
 Generates a spline based background model (by gradient descent optimization) for the input (linear) image. 
 Both the background-subtracted image and background model are written to the specified output directory 
 (appending '_bgSubtracted' and 'bgModel' suffixes to the original filename). A mask can be specified by
-providing a grayscale mask image, or by providing a (min, max) threshold range (outside this range, 
+providing a mask image, or by providing a (min, max) threshold range (outside this range, 
 pixels are masked). Fully masked pixels are ignored during optimization, so masks are helpful, e.g., for 
 ignorig missing values after registration, or very bright regions, when fitting the spline. Only XISF files
 are supported. 
@@ -91,7 +91,7 @@ parser.add_argument("-tm", "--threshold-min", type=float, default=config_default
 parser.add_argument("-tM", "--threshold-max", type=float, default=config_defaults['threshold_max'], 
                     help="A mask can be defined by giving a (min, max) range") 
 parser.add_argument("-m", "--mask", type=str, default=config_defaults['mask'], 
-                    help="Path to a mask file (grayscale)")
+                    help="Path to a mask file")
 parser.add_argument("-i", "--initializer", default=config_defaults['initializer'], 
                     help="The spline fitting could be initialized with 'random' train points, or arranging them in a 'grid'")
 parser.add_argument("-e", "--epochs", type=int, default=config_defaults['epochs'], 
@@ -155,8 +155,15 @@ im_ds_nl = improc.fit_transform(im_fr_lin)
 
 # Get mask
 if config['mask']:
-  mask = improc.downscale( XISF.read(config['mask']) )
-  assert mask.shape == im_ds_nl.shape, f"Mask should have the same shape as the input image: {im_ds_nl.shape}"
+  mask = XISF.read(config['mask'])
+  if mask.shape[:2] != im_fr_lin.shape[:2]:
+    print(f"Mask should have the same size as the input image: {im_fr_lin.shape[:2]}")
+    exit(1)
+  # if mask.shape[-1] != 1:
+  #   print(f"Mask should have only one channel")
+  #   exit(1)
+
+  mask = improc.downscale( mask )
   config['npmask'] = mask
 else:
   mask = Spline._generate_mask(im_ds_nl, config['threshold'])

@@ -93,7 +93,7 @@ class Spline(keras.layers.Layer):
         self.im = im
 
         if isinstance(mask, np.ndarray):
-            if im.shape == mask.shape:
+            if im.shape[:2] == mask.shape[:2]:
                 self.mask = mask
             else:
                 raise ValueError("if mask is a ndarray, it should have the same shape as im")
@@ -137,7 +137,7 @@ class Spline(keras.layers.Layer):
         
         # Checks
         assert isinstance(self.mask, np.ndarray) # At this point, mask should be a ndarray
-        assert self.mask.shape == self.im.shape  # At this point, mask and shape should have the same shape
+        assert self.mask.shape[:2] == self.im.shape[:2]  # At this point, mask and im should have the same shape
         
         if self.initializer == 'random':
             # Generate train_points randomly distributed over [0,1) box
