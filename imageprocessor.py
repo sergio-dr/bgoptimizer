@@ -150,8 +150,8 @@ class ImageProcessor:
     @staticmethod
     def statistics(im, title=""):
         im_min, im_med, im_max = np.nanmin(im, axis=(0,1)), np.nanmedian(im, axis=(0,1)), np.nanmax(im, axis=(0,1))
-        print(f"[{title.ljust(12)}] Min / Median / Max = {float(im_min):.4f} / {float(im_med):.4f} / {float(im_max):.4f}", end='')
-        print("  (!)" if (im_min < 0).any() or (im_max > 1).any() else "")
+        print(f"[{title.ljust(12)}] Min / Median / Max = {im_min} / {im_med} / {im_max}", end='')
+        print("  (!)" if (im_min < 0).any() else "")
         return im_min, im_med, im_max
 
 

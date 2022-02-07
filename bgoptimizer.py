@@ -21,6 +21,7 @@ import argparse
 import os 
 from xisf import XISF
 import numpy as np
+np.set_printoptions(precision=4, suppress=True, floatmode='fixed')
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' # Only show errors
 import tensorflow as tf
