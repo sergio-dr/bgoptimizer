@@ -40,6 +40,7 @@ DEBUG_CMDLINE = None
 #DEBUG_CMDLINE = "in\\orion\\O3.xisf out2 -dq 1.0 -p".split(" ") 
 
 
+creator_app = "github.com/sergio-dr/bgoptimizer"
 bg_model_fits_comment = "Background-subtracted with github.com/sergio-dr/bgoptimizer"
 
 
@@ -74,6 +75,8 @@ parser.add_argument("input_file",
                     help="Input filename. Must be in XISF format, in linear state")
 parser.add_argument("output_path", default=config_defaults['out_dirpath'], nargs='?',
                     help="Path for the output files (by default, the current directory)")
+parser.add_argument("-c", "--compress", action='store_true',
+                    help="Enables lz4hc+shuffling compression for output files")
 parser.add_argument("-dx", "--downscaling-factor", type=int, default=config_defaults['downscaling_factor'], 
                     help="Image downscaling factor for spline fitting")
 parser.add_argument("-df", "--downscaling-func", default=config_defaults['downscaling_func'], 
@@ -214,12 +217,22 @@ os.makedirs(out_dirpath, exist_ok=True)
 metadata = xisf.get_images_metadata()[0]
 metadata['FITSKeywords'].setdefault('COMMENT', []).append({'value':'', 'comment': bg_model_fits_comment})
 
-print(f"Writing {out_filepath}... ")
-XISF.write(out_filepath, im_hat_fr_lin, metadata, xisf.get_file_metadata())
+codec, shuffle = ('lz4hc', True) if config['compress'] else (None, False)
+
+print(f"Writing {out_filepath}... ", end="")
+XISF.write(
+  out_filepath, im_hat_fr_lin, 
+  creator_app=creator_app, image_metadata=metadata, xisf_metadata=xisf.get_file_metadata(),
+  codec=codec, shuffle=shuffle
+)
 print("done.")
 
-print(f"Writing {bg_filepath}... ")
-XISF.write(bg_filepath, bg_hat_fr_lin)
+print(f"Writing {bg_filepath}... ", end="")
+XISF.write(
+  bg_filepath, bg_hat_fr_lin, 
+  creator_app=creator_app,
+  codec=codec, shuffle=shuffle
+)
 print("done.")
 
 plt.show()
