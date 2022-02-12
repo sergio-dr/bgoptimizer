@@ -54,6 +54,8 @@ ignorig missing values after registration, or very bright regions, when fitting 
 are supported. 
 """
 
+epilog = f"Project page: {creator_app}, by Sergio Díaz, sergiodiaz.eu"
+
 config_defaults = {
     'out_dirpath': '.',
     'downscaling_factor': 8, 'downscaling_func': 'median',
@@ -70,7 +72,7 @@ config_defaults = {
     'epochs': 1000,
 }
 
-parser = argparse.ArgumentParser(description=help_desc, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser = argparse.ArgumentParser(description=help_desc, epilog=epilog, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("input_file", 
                     help="Input filename. Must be in XISF format, in linear state")
 parser.add_argument("output_path", default=config_defaults['out_dirpath'], nargs='?',
