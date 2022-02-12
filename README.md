@@ -48,6 +48,7 @@ positional arguments:
 
 optional arguments:
   -h, --help            show this help message and exit
+  -c, --compress        Enables lz4hc+shuffling compression for output files (default: False)  
   -dx DOWNSCALING_FACTOR, --downscaling-factor DOWNSCALING_FACTOR
                         Image downscaling factor for spline fitting (default: 8)
   -df DOWNSCALING_FUNC, --downscaling-func DOWNSCALING_FUNC
@@ -76,16 +77,17 @@ optional arguments:
 
 ## Usage guidelines
 
-1. As the background model is expected to be smooth, the optimization process is executed on a downscaled version on the input image, for performance. For very large or very small images you may want to change the `--downscaling-factor` value. 
-1. You should stretch the data to reveal the background using the `--preview` mode. In this step you will want to fine tune the `--delinearization-quantile` value, that controls the amount of stretch (lower values imply more stretching). Don't worry about the highlights as long as you don't blown out the brightest parts of the background gradient. Example:
+1. As the background model is expected to be smooth, the optimization process is executed on a downscaled version on the input image, to limit memory usage and increase performance. For large or small images you may want to change the `--downscaling-factor` value. 
+1. Before running the optimization process, you may want to fine tune the `--delinearization-quantile` value, that controls the amount of stretch applied to the data to reveal the background, using the `--preview` mode (lower values imply more stretching). Don't worry about blowing out the highlights (star cores, nebulae), but it's important that you don't blown out the brightest parts of the background gradient. Example:
     ```
     bgoptimizer.py input.xisf -dq 0.9 -p
     ```
-1. Check if you want to mask out too dim or too bright features. Fully masked pixels will be ignored by the optimizer. This may help if there are "black borders" resulting from registration, or if the data contains missing values (typically mapped to zero), or if bright nebulosity is present. In many cases, simply providing `--threshold-max` and `--threshold-min` values may be enough to get a decent mask. For example, in skyscapes, sometimes the foreground is darker than the sky, and it may simply masked out with `--threshold-min`. In other cases, you may want to create a more elaborated mask with another tool and provide it with the `--mask` option. This step should be also tried with the `--preview` mode. Example:
+1. Check if you want to mask out too dim or too bright features. Fully masked pixels will be ignored by the optimizer. This may help if there are "black borders" resulting from registration, or if the data contains missing values (typically mapped to zero), or if bright nebulosity is present. In many cases, simply providing `--threshold-max` and `--threshold-min` values may be enough to get a decent mask. For example, in skyscapes, sometimes the foreground is darker than the sky background, and it may simply masked out with `--threshold-min`. In other cases, you may want to create a more elaborated mask with another tool and provide it with the `--mask` option. Masks are also shown in the `--preview` mode. Example:
     ```
     bgoptimizer.py input.xisf -dq 0.9 -tM 0.75 -p
     ```
-1. When you are happy with the delinearization and masking, its time to give a run to the optimization process. In this step you may want to fine tune the number of control points, `-N`, the initializer `--initializer` and the number or iterations or epochs, `--epochs`. The optimizer early stops when there is no further improvement, so the provided epochs value may not be reached. The default values of the rest of the parameters usually work well. Example:
+1. When you are happy with the delinearization and masking, its time to run the optimization process. In this step you may want to fine tune the number of control points, `-N`, the initializer, `--initializer`, and/or the number or iterations, `--epochs`. The optimizer early stops when there is no further improvement, so the provided epochs value may not be reached. The default values of the rest of the parameters usually work well. Example:
     ```
-    bgoptimizer.py input.xisf -dq 0.9 -tM 0.75 -N 64 -e 5000
+    bgoptimizer.py input.xisf -dq 0.9 -tM 0.75 -i grid -N 64 -e 5000
     ```
+1. The output files are written on the current directory by default; you may specify an alternate output directory. The output filenames are based on the input filename, but adding the suffixes `_bgModel` and `_bgSubtracted` for the generated background model and the background-subtracted image, respectively. To generate compressed XISF files, use `--compress`. 
